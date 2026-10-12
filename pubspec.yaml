@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   fl_chart: ^1.2.0
 
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -59,6 +60,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
+    - assets/house.png
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:my_test_app/screens/welcome_screen.dart';
 import 'screens/splash_screen.dart';
 
 void main() {
@@ -20,7 +21,7 @@ class SimentriApp extends StatelessWidget {
         useMaterial3: true,
         // fontFamily: 'Inter', // Uncomment if you add fonts to pubspec.yaml
       ),
-      home: const SplashScreen(),
+      home: const WelcomeScreen(),
     );
   }
 }

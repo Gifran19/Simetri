@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'splash_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
@@ -66,21 +67,29 @@ class WelcomeScreen extends StatelessWidget {
                       height: 1.5,
                     ),
                   ),
-                  const SizedBox(height: 32),
                   SizedBox(
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
+
                       onPressed: () {
-                        // Action for Get Started
-                        // You can navigate to the next screen here
+
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const SplashScreen(),
+                          ),
+                        );
+
                       },
+
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF003b73), // Dark blue button
+                        backgroundColor: const Color(0xFF003b73),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
+
                       child: const Text(
                         'Get Started',
                         style: TextStyle(
@@ -89,6 +98,7 @@ class WelcomeScreen extends StatelessWidget {
                           color: Colors.white,
                         ),
                       ),
+
                     ),
                   ),
                 ],
