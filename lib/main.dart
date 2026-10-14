@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:my_test_app/screens/welcome_screen.dart';
-import 'screens/splash_screen.dart';
+import 'screens/welcome_screen.dart';
 
 void main() {
   runApp(const SimentriApp());
@@ -15,11 +14,13 @@ class SimentriApp extends StatelessWidget {
       title: 'SIMETRI',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xff071426),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF003b73), // Dark blue primary
+          seedColor: const Color(0xff00D9A6),
+          brightness: Brightness.dark,
         ),
         useMaterial3: true,
-        // fontFamily: 'Inter', // Uncomment if you add fonts to pubspec.yaml
       ),
       home: const WelcomeScreen(),
     );
