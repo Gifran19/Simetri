@@ -7,8 +7,7 @@ class Responsive {
   static const double tabletBreakpoint = 1100;
   static const double maxContentWidth = 900;
 
-  static bool isMobile(BuildContext context) =>
-      MediaQuery.sizeOf(context).width < mobileBreakpoint;
+  static bool isMobile(BuildContext context) => MediaQuery.sizeOf(context).width < mobileBreakpoint;
 
   static bool isTablet(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
@@ -21,19 +20,12 @@ class Responsive {
   static bool isLandscape(BuildContext context) =>
       MediaQuery.orientationOf(context) == Orientation.landscape;
 
-  static double screenWidth(BuildContext context) =>
-      MediaQuery.sizeOf(context).width;
+  static double screenWidth(BuildContext context) => MediaQuery.sizeOf(context).width;
 
-  static double screenHeight(BuildContext context) =>
-      MediaQuery.sizeOf(context).height;
+  static double screenHeight(BuildContext context) => MediaQuery.sizeOf(context).height;
 
   /// Returns different values based on current device screen size
-  static T value<T>(
-    BuildContext context, {
-    required T mobile,
-    T? tablet,
-    T? desktop,
-  }) {
+  static T value<T>(BuildContext context, {required T mobile, T? tablet, T? desktop}) {
     if (isDesktop(context)) return desktop ?? tablet ?? mobile;
     if (isTablet(context)) return tablet ?? mobile;
     return mobile;
@@ -67,10 +59,7 @@ class ResponsiveContainer extends StatelessWidget {
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Padding(
-          padding: padding ?? defaultPadding,
-          child: child,
-        ),
+        child: Padding(padding: padding ?? defaultPadding, child: child),
       ),
     );
   }

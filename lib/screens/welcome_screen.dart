@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import 'splash_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
@@ -16,14 +17,9 @@ class WelcomeScreen extends StatelessWidget {
               builder: (context, constraints) {
                 return SingleChildScrollView(
                   physics: const BouncingScrollPhysics(),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 32,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight - 64,
-                    ),
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight - 64),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -43,11 +39,7 @@ class WelcomeScreen extends StatelessWidget {
                             const Text(
                               'Pantau konsumsi energi, kontrol perangkat pintar, dan hemat biaya bulanan Anda secara cerdas.',
                               textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Color(0xffB8C2D1),
-                                fontSize: 13,
-                                height: 1.5,
-                              ),
+                              style: TextStyle(color: Color(0xffB8C2D1), fontSize: 13, height: 1.5),
                             ),
                             const SizedBox(height: 24),
                             SizedBox(
@@ -57,10 +49,7 @@ class WelcomeScreen extends StatelessWidget {
                                 onPressed: () {
                                   Navigator.push(
                                     context,
-                                    MaterialPageRoute(
-                                      builder: (context) =>
-                                          const SplashScreen(),
-                                    ),
+                                    MaterialPageRoute(builder: (context) => const SplashScreen()),
                                   );
                                 },
                                 style: ElevatedButton.styleFrom(

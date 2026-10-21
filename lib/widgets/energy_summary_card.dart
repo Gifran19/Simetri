@@ -5,6 +5,8 @@ class EnergySummaryCard extends StatelessWidget {
   final String valueLeft;
   final String titleRight;
   final String valueRight;
+  final String? badgeLeft;
+  final String? badgeRight;
 
   const EnergySummaryCard({
     super.key,
@@ -12,6 +14,8 @@ class EnergySummaryCard extends StatelessWidget {
     required this.valueLeft,
     required this.titleRight,
     required this.valueRight,
+    this.badgeLeft,
+    this.badgeRight,
   });
 
   @override
@@ -24,7 +28,7 @@ class EnergySummaryCard extends StatelessWidget {
             const Color(0xff00D9A6),
             titleLeft,
             valueLeft,
-            '↓ 12% hemat',
+            badgeLeft ?? '↓ 12% hemat',
           ),
         ),
         const SizedBox(width: 12),
@@ -34,29 +38,20 @@ class EnergySummaryCard extends StatelessWidget {
             const Color(0xff00D9FF),
             titleRight,
             valueRight,
-            'Sesuai estimasi',
+            badgeRight ?? 'Sesuai estimasi',
           ),
         ),
       ],
     );
   }
 
-  Widget _summaryItem(
-    IconData icon,
-    Color color,
-    String title,
-    String value,
-    String badgeText,
-  ) {
+  Widget _summaryItem(IconData icon, Color color, String title, String value, String badgeText) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xff10233F),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.06),
-          width: 1,
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.15),
@@ -70,10 +65,7 @@ class EnergySummaryCard extends StatelessWidget {
         children: [
           Container(
             padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.15), shape: BoxShape.circle),
             child: Icon(icon, color: color, size: 18),
           ),
           const SizedBox(height: 10),
@@ -81,11 +73,7 @@ class EnergySummaryCard extends StatelessWidget {
             title,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white60,
-              fontSize: 11,
-              height: 1.3,
-            ),
+            style: const TextStyle(color: Colors.white60, fontSize: 11, height: 1.3),
           ),
           const SizedBox(height: 4),
           FittedBox(
@@ -109,11 +97,7 @@ class EnergySummaryCard extends StatelessWidget {
             ),
             child: Text(
               badgeText,
-              style: TextStyle(
-                color: color,
-                fontSize: 9,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold),
             ),
           ),
         ],

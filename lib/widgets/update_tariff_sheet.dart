@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../services/security_service.dart';
 
 class UpdateTariffSheet extends StatefulWidget {
   final double currentTariff;
   final Function(double tariff, String date, String note) onSave;
 
-  const UpdateTariffSheet({
-    super.key,
-    required this.currentTariff,
-    required this.onSave,
-  });
+  const UpdateTariffSheet({super.key, required this.currentTariff, required this.onSave});
 
   @override
   State<UpdateTariffSheet> createState() => _UpdateTariffSheetState();
@@ -20,6 +17,13 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
   final TextEditingController _noteController = TextEditingController();
 
   String _selectedDate = 'Hari ini';
+
+  @override
+  void initState() {
+    super.initState();
+    // Default isi dengan tarif aktif
+    _tariffController.text = widget.currentTariff.toInt().toString();
+  }
 
   Future<void> _pickDate() async {
     final DateTime? picked = await showDatePicker(
@@ -82,13 +86,19 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'Update Tarif Listrik',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    const Row(
+                      children: [
+                        Icon(Icons.bolt_rounded, color: Color(0xff00D9A6), size: 22),
+                        SizedBox(width: 8),
+                        Text(
+                          'Update Tarif Listrik',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                     IconButton(
                       onPressed: () => Navigator.pop(context),
@@ -97,16 +107,13 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                   ],
                 ),
                 const Text(
-                  'Form ini digunakan untuk mengubah tarif listrik secara manual sesuai kebutuhan Anda.',
+                  'Masukkan nominal tarif listrik per kWh secara manual.',
                   style: TextStyle(color: Colors.white54, fontSize: 11),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // TARIF SAAT INI
-                const Text(
-                  'Tarif saat ini',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
+                const Text('Tarif saat ini', style: TextStyle(color: Colors.white70, fontSize: 12)),
                 const SizedBox(height: 8),
                 Container(
                   width: double.infinity,
@@ -125,7 +132,7 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // TARIF BARU
                 const Text(
@@ -135,11 +142,11 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                 const SizedBox(height: 8),
                 TextField(
                   controller: _tariffController,
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   style: const TextStyle(color: Colors.white),
                   onChanged: (val) => setState(() {}),
                   decoration: InputDecoration(
-                    hintText: 'Contoh: 1450',
+                    hintText: 'Contoh: 1444.70',
                     hintStyle: const TextStyle(color: Colors.white30),
                     prefixText: 'Rp  ',
                     prefixStyle: const TextStyle(
@@ -158,13 +165,10 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // TANGGAL BERLAKU
-                const Text(
-                  'Mulai berlaku',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
+                const Text('Mulai berlaku', style: TextStyle(color: Colors.white70, fontSize: 12)),
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -182,15 +186,11 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                   label: Text('Pilih Tanggal Manual ($_selectedDate)'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xff00D9A6),
-                    side: BorderSide(
-                      color: const Color(0xff00D9A6).withValues(alpha: 0.5),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+                    side: BorderSide(color: const Color(0xff00D9A6).withValues(alpha: 0.5)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // CATATAN
                 const Text(
@@ -202,7 +202,7 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                   controller: _noteController,
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
-                    hintText: 'Misal: Kenaikan tarif listrik PLN',
+                    hintText: 'Misal: Penyesuaian tarif listrik PLN',
                     hintStyle: const TextStyle(color: Colors.white30),
                     filled: true,
                     fillColor: const Color(0xff10233F),
@@ -216,7 +216,7 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // PREVIEW PERUBAHAN
                 Container(
@@ -225,41 +225,56 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                   decoration: BoxDecoration(
                     color: const Color(0xff10233F),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: const Color(0xff00D9A6).withValues(alpha: 0.2),
-                    ),
+                    border: Border.all(color: const Color(0xff00D9A6).withValues(alpha: 0.2)),
                   ),
-                  child: Text(
-                    'Rp ${widget.currentTariff.toInt()}  →  Rp ${_tariffController.text.isEmpty ? "0" : _tariffController.text} /kWh',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Ringkasan Perubahan:',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Text(
+                        'Rp ${widget.currentTariff.toInt()}  →  Rp ${_tariffController.text.isEmpty ? "0" : _tariffController.text} /kWh',
+                        style: const TextStyle(
+                          color: Color(0xff00D9A6),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 22),
+                const SizedBox(height: 20),
 
                 // TOMBOL SIMPAN
                 SizedBox(
                   width: double.infinity,
                   height: 50,
                   child: ElevatedButton(
-                    onPressed: () {
+                    onPressed: () async {
                       final value = double.tryParse(_tariffController.text);
                       if (value != null) {
+                        final authorized = await SecurityService.requestAuthorization(
+                          context: context,
+                          actionTitle: 'Ubah Tarif Listrik',
+                          actionDescription:
+                              'Verifikasi identitas untuk mengubah tarif listrik ke Rp ${value.toInt()} /kWh.',
+                        );
+                        if (!authorized) return;
+
                         widget.onSave(value, _selectedDate, _noteController.text);
+                        if (!context.mounted) return;
                         Navigator.pop(context);
                       }
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xff00D9A6),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
                     child: const Text(
-                      'Simpan Perubahan',
+                      'Simpan Perubahan Tarif',
                       style: TextStyle(
                         color: Colors.black,
                         fontWeight: FontWeight.bold,
@@ -283,15 +298,11 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
         onPressed: () => setState(() => _selectedDate = text),
         style: OutlinedButton.styleFrom(
           foregroundColor: isSelected ? const Color(0xff00D9A6) : Colors.white70,
-          side: BorderSide(
-            color: isSelected ? const Color(0xff00D9A6) : Colors.white24,
-          ),
+          side: BorderSide(color: isSelected ? const Color(0xff00D9A6) : Colors.white24),
           backgroundColor: isSelected
               ? const Color(0xff00D9A6).withValues(alpha: 0.12)
               : Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           padding: const EdgeInsets.symmetric(vertical: 10),
         ),
         child: FittedBox(

@@ -1,16 +1,29 @@
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 class MonitoringCard extends StatefulWidget {
   final double voltage;
   final double power;
   final double current;
+  final double frequency;
+  final double powerFactor;
+  final int powerLimitVa;
+  final VoidCallback? onConfigureLimit;
+  final bool isConnected;
+  final bool isPowerOn;
 
   const MonitoringCard({
     super.key,
     required this.voltage,
     required this.power,
     required this.current,
+    this.frequency = 50.0,
+    this.powerFactor = 0.98,
+    this.powerLimitVa = 1300,
+    this.onConfigureLimit,
+    this.isConnected = true,
+    this.isPowerOn = true,
   });
 
   @override
@@ -31,10 +44,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
       decoration: BoxDecoration(
         color: const Color(0xff10233F),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: const Color(0xff00D9A6).withValues(alpha: 0.15),
-          width: 1,
-        ),
+        border: Border.all(color: const Color(0xff00D9A6).withValues(alpha: 0.15), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.25),
@@ -56,16 +66,20 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     Container(
                       width: 8,
                       height: 8,
-                      decoration: const BoxDecoration(
-                        color: Color(0xff00D9A6),
+                      decoration: BoxDecoration(
+                        color: widget.isConnected
+                            ? (widget.isPowerOn ? const Color(0xff00D9A6) : Colors.orangeAccent)
+                            : Colors.grey.shade600,
                         shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Color(0xff00D9A6),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
+                        boxShadow: widget.isConnected && widget.isPowerOn
+                            ? [
+                                const BoxShadow(
+                                  color: Color(0xff00D9A6),
+                                  blurRadius: 6,
+                                  spreadRadius: 1,
+                                ),
+                              ]
+                            : null,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -81,37 +95,61 @@ class _MonitoringCardState extends State<MonitoringCard> {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: widget.isConnected
+                            ? (widget.isPowerOn
+                                ? const Color(0xff00D9A6).withValues(alpha: 0.15)
+                                : Colors.orangeAccent.withValues(alpha: 0.15))
+                            : Colors.white10,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        widget.isConnected
+                            ? (widget.isPowerOn ? 'LIVE' : 'MATI (OFF)')
+                            : 'OFFLINE',
+                        style: TextStyle(
+                          color: widget.isConnected
+                              ? (widget.isPowerOn ? const Color(0xff00D9A6) : Colors.orangeAccent)
+                              : Colors.white38,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              // View mode switch button
-              Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xff071426),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.08),
+              if (_viewMode == 1)
+                InkWell(
+                  onTap: () => setState(() => _viewMode = 0),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xff00D9A6).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xff00D9A6).withValues(alpha: 0.3)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.arrow_back_rounded, size: 12, color: Color(0xff00D9A6)),
+                        SizedBox(width: 4),
+                        Text(
+                          '3 Parameter',
+                          style: TextStyle(
+                            color: Color(0xff00D9A6),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildModeButton(
-                      icon: Icons.grid_view_rounded,
-                      label: '3 Meter',
-                      isSelected: _viewMode == 0,
-                      onTap: () => setState(() => _viewMode = 0),
-                    ),
-                    _buildModeButton(
-                      icon: Icons.adjust_rounded,
-                      label: 'Fokus',
-                      isSelected: _viewMode == 1,
-                      onTap: () => setState(() => _viewMode = 1),
-                    ),
-                  ],
-                ),
-              ),
             ],
           ),
 
@@ -126,55 +164,125 @@ class _MonitoringCardState extends State<MonitoringCard> {
                 child: ScaleTransition(scale: animation, child: child),
               );
             },
-            child: _viewMode == 0
-                ? _buildTrioGauges()
-                : _buildHeroGauge(),
+            child: _viewMode == 0 ? _buildTrioGauges() : _buildHeroGauge(),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Kapasitas Beban Daya vs Batas MCB PLN (Anti-Trip / Overload Alert)
+          _buildMcbCapacityBar(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMcbCapacityBar() {
+    final isLive = widget.isConnected && widget.isPowerOn;
+    final powerValue = isLive ? widget.power : 0.0;
+    final limitVa = widget.powerLimitVa > 0 ? widget.powerLimitVa : 1300;
+    final double percent = (powerValue / limitVa) * 100;
+    final double clampedFraction = (percent / 100).clamp(0.0, 1.0);
+
+    Color statusColor = const Color(0xff00D9A6);
+    String statusText = 'Beban Listrik Aman';
+    IconData statusIcon = Icons.shield_rounded;
+
+    if (percent >= 95) {
+      statusColor = Colors.redAccent;
+      statusText = 'BAHAYA OVERLOAD! Risiko MCB PLN Trip';
+      statusIcon = Icons.warning_rounded;
+    } else if (percent >= 80) {
+      statusColor = Colors.orangeAccent;
+      statusText = 'WASPADA: Beban Mendekati Batas MCB';
+      statusIcon = Icons.error_outline_rounded;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xff071426),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: percent >= 80 ? statusColor.withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.06),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(statusIcon, color: statusColor, size: 15),
+                  const SizedBox(width: 6),
+                  Text(
+                    statusText,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              if (widget.onConfigureLimit != null)
+                InkWell(
+                  onTap: widget.onConfigureLimit,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      'Ubah $limitVa VA',
+                      style: const TextStyle(
+                        color: Color(0xff00D9A6),
+                        fontSize: 10.5,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  'Batas: $limitVa VA',
+                  style: const TextStyle(color: Colors.white54, fontSize: 10.5),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: clampedFraction,
+              minHeight: 7,
+              backgroundColor: Colors.white10,
+              valueColor: AlwaysStoppedAnimation<Color>(statusColor),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Terpakai: ${powerValue.toStringAsFixed(1)} W',
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+              Text(
+                '${percent.toStringAsFixed(1)}% Kapasitas',
+                style: TextStyle(
+                  color: statusColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildModeButton({
-    required IconData icon,
-    required String label,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xff00D9A6).withValues(alpha: 0.2)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 13,
-              color: isSelected ? const Color(0xff00D9A6) : Colors.white54,
-            ),
-            const SizedBox(width: 3),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? const Color(0xff00D9A6) : Colors.white54,
-                fontSize: 10.5,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+
 
   // ==========================================
   // TRIO VIEW: 3 Enlarged Responsive Circles
@@ -204,8 +312,10 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: GaugeMeter(
-                      value: widget.voltage / 250,
-                      valueText: '${widget.voltage.toInt()}',
+                      value: (widget.isConnected && widget.isPowerOn) ? widget.voltage / 250 : 0.0,
+                      valueText: (widget.isConnected && widget.isPowerOn)
+                          ? '${widget.voltage.toInt()}'
+                          : (widget.isConnected ? '0' : '--'),
                       unitText: 'V',
                       title: 'Tegangan',
                       subtitle: 'Volt (V)',
@@ -230,8 +340,10 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: GaugeMeter(
-                      value: widget.power / 100,
-                      valueText: widget.power.toStringAsFixed(1),
+                      value: (widget.isConnected && widget.isPowerOn) ? widget.power / 100 : 0.0,
+                      valueText: (widget.isConnected && widget.isPowerOn)
+                          ? widget.power.toStringAsFixed(1)
+                          : (widget.isConnected ? '0.0' : '--'),
                       unitText: 'W',
                       title: 'Daya',
                       subtitle: 'Watt (W)',
@@ -256,8 +368,10 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: GaugeMeter(
-                      value: widget.current / 5,
-                      valueText: widget.current.toStringAsFixed(1),
+                      value: (widget.isConnected && widget.isPowerOn) ? widget.current / 5 : 0.0,
+                      valueText: (widget.isConnected && widget.isPowerOn)
+                          ? widget.current.toStringAsFixed(1)
+                          : (widget.isConnected ? '0.0' : '--'),
                       unitText: 'A',
                       title: 'Arus',
                       subtitle: 'Ampere (A)',
@@ -279,17 +393,20 @@ class _MonitoringCardState extends State<MonitoringCard> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.touch_app_rounded,
+                  widget.isConnected
+                      ? (widget.isPowerOn ? Icons.touch_app_rounded : Icons.power_settings_new_rounded)
+                      : Icons.info_outline_rounded,
                   size: 13,
                   color: Colors.white.withValues(alpha: 0.35),
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  'Ketuk lingkaran untuk memperbesar detail',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.45),
-                    fontSize: 10,
-                  ),
+                  widget.isConnected
+                      ? (widget.isPowerOn
+                          ? 'Ketuk lingkaran untuk memperbesar detail'
+                          : 'Smart Meter nonaktif (OFF) • Nyalakan saklar untuk membaca sensor')
+                      : 'Perangkat belum terhubung • Data sensor offline',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 10),
                 ),
               ],
             ),
@@ -312,33 +429,47 @@ class _MonitoringCardState extends State<MonitoringCard> {
     late String statusNote;
     late IconData icon;
 
+    final isLive = widget.isConnected && widget.isPowerOn;
+
     switch (_selectedMetric) {
       case 0:
         title = 'Tegangan Listrik';
-        valueText = '${widget.voltage.toInt()}';
+        valueText = isLive ? '${widget.voltage.toInt()}' : (widget.isConnected ? '0' : '--');
         unit = 'Volt';
-        progress = (widget.voltage / 250).clamp(0.0, 1.0);
+        progress = isLive ? (widget.voltage / 250).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00FFA3), Color(0xff00D9A6), Color(0xff00A896)];
-        statusNote = 'Tegangan Stabil • 220V Normal PLN';
+        statusNote = widget.isConnected
+            ? (widget.isPowerOn
+                ? 'Tegangan Stabil • 220V Normal PLN'
+                : 'Smart Meter Dimatikan (Standby) • Sensor Tidak Mengirim Data')
+            : 'Perangkat Belum Terhubung • Sensor Offline';
         icon = Icons.bolt_rounded;
         break;
       case 1:
         title = 'Daya Aktif';
-        valueText = widget.power.toStringAsFixed(1);
+        valueText = isLive ? widget.power.toStringAsFixed(1) : (widget.isConnected ? '0.0' : '--');
         unit = 'Watt';
-        progress = (widget.power / 100).clamp(0.0, 1.0);
+        progress = isLive ? (widget.power / 100).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00D2FF), Color(0xff008CFF), Color(0xff0052D4)];
-        statusNote = 'Beban Rendah • Penggunaan Efisien';
+        statusNote = widget.isConnected
+            ? (widget.isPowerOn
+                ? 'Beban Rendah • Penggunaan Efisien'
+                : 'Smart Meter Dimatikan • Monitoring Daya Nonaktif')
+            : 'Perangkat Belum Terhubung • Sensor Offline';
         icon = Icons.power_rounded;
         break;
       case 2:
       default:
         title = 'Kuat Arus';
-        valueText = widget.current.toStringAsFixed(1);
+        valueText = isLive ? widget.current.toStringAsFixed(1) : (widget.isConnected ? '0.0' : '--');
         unit = 'Ampere';
-        progress = (widget.current / 5).clamp(0.0, 1.0);
+        progress = isLive ? (widget.current / 5).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xffF9D423), Color(0xffB7FF00), Color(0xff70E000)];
-        statusNote = 'Arus Normal • Aman dari lonjakan';
+        statusNote = widget.isConnected
+            ? (widget.isPowerOn
+                ? 'Arus Normal • Aman dari lonjakan'
+                : 'Smart Meter Dimatikan • Monitoring Arus Nonaktif')
+            : 'Perangkat Belum Terhubung • Sensor Offline';
         icon = Icons.waves_rounded;
         break;
     }
@@ -369,20 +500,43 @@ class _MonitoringCardState extends State<MonitoringCard> {
 
             const SizedBox(height: 20),
 
-            // Giant Glowing Circular Gauge
+            // Giant Glowing Circular Gauge (Ketuk untuk kembali ke 3 Meter)
             Center(
-              child: HeroCircularGauge(
-                size: heroSize,
-                progress: progress,
-                valueText: valueText,
-                unitText: unit,
-                title: title,
-                gradientColors: colors,
-                icon: icon,
+              child: InkWell(
+                onTap: () => setState(() => _viewMode = 0),
+                borderRadius: BorderRadius.circular(heroSize / 2),
+                child: HeroCircularGauge(
+                  size: heroSize,
+                  progress: progress,
+                  valueText: valueText,
+                  unitText: unit,
+                  title: title,
+                  gradientColors: colors,
+                  icon: icon,
+                ),
               ),
             ),
 
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
+
+            // Tap hint untuk kembali
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.touch_app_rounded,
+                  size: 13,
+                  color: Colors.white.withValues(alpha: 0.35),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Ketuk lingkaran untuk kembali ke tampilan 3 meter',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 10),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 14),
 
             // Status Badge
             Container(
@@ -390,10 +544,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
               decoration: BoxDecoration(
                 color: colors[1].withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: colors[1].withValues(alpha: 0.3),
-                  width: 1,
-                ),
+                border: Border.all(color: colors[1].withValues(alpha: 0.3), width: 1),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -402,11 +553,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                   const SizedBox(width: 6),
                   Text(
                     statusNote,
-                    style: TextStyle(
-                      color: colors[0],
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: TextStyle(color: colors[0], fontSize: 12, fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
@@ -426,13 +573,9 @@ class _MonitoringCardState extends State<MonitoringCard> {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-            color: isSelected
-                ? accentColor.withValues(alpha: 0.2)
-                : Colors.transparent,
+            color: isSelected ? accentColor.withValues(alpha: 0.2) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
-            border: isSelected
-                ? Border.all(color: accentColor.withValues(alpha: 0.4))
-                : null,
+            border: isSelected ? Border.all(color: accentColor.withValues(alpha: 0.4)) : null,
           ),
           child: Text(
             label,
@@ -542,20 +685,10 @@ class GaugeMeter extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           title,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
+          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 2),
-        Text(
-          subtitle,
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.5),
-            fontSize: 10,
-          ),
-        ),
+        Text(subtitle, style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 10)),
       ],
     );
   }
@@ -626,11 +759,7 @@ class HeroCircularGauge extends StatelessWidget {
                         color: gradientColors[0].withValues(alpha: 0.15),
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(
-                        icon,
-                        color: gradientColors[0],
-                        size: 20,
-                      ),
+                      child: Icon(icon, color: gradientColors[0], size: 20),
                     ),
                     const SizedBox(height: 6),
                     Text(
@@ -670,11 +799,7 @@ class NeonGaugePainter extends CustomPainter {
   final List<Color> colors;
   final double strokeWidth;
 
-  NeonGaugePainter({
-    required this.progress,
-    required this.colors,
-    required this.strokeWidth,
-  });
+  NeonGaugePainter({required this.progress, required this.colors, required this.strokeWidth});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -760,11 +885,7 @@ class HeroNeonGaugePainter extends CustomPainter {
   final List<Color> colors;
   final double strokeWidth;
 
-  HeroNeonGaugePainter({
-    required this.progress,
-    required this.colors,
-    required this.strokeWidth,
-  });
+  HeroNeonGaugePainter({required this.progress, required this.colors, required this.strokeWidth});
 
   @override
   void paint(Canvas canvas, Size size) {

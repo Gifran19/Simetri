@@ -4,12 +4,16 @@ class DeviceStatusCard extends StatelessWidget {
   final bool connected;
   final bool power;
   final ValueChanged<bool> onChanged;
+  final VoidCallback? onConnect;
+  final VoidCallback? onDisconnect;
 
   const DeviceStatusCard({
     super.key,
     required this.connected,
     required this.power,
     required this.onChanged,
+    this.onConnect,
+    this.onDisconnect,
   });
 
   @override
@@ -20,7 +24,9 @@ class DeviceStatusCard extends StatelessWidget {
         color: const Color(0xff10233F),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.06),
+          color: connected
+              ? const Color(0xff00D9A6).withValues(alpha: 0.25)
+              : Colors.white.withValues(alpha: 0.08),
           width: 1,
         ),
         boxShadow: [
@@ -34,7 +40,7 @@ class DeviceStatusCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // STATUS DEVICE
+          // STATUS DEVICE (Row 1)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -44,15 +50,11 @@ class DeviceStatusCard extends StatelessWidget {
                     width: 10,
                     height: 10,
                     decoration: BoxDecoration(
-                      color: connected
-                          ? const Color(0xff00D9A6)
-                          : Colors.redAccent,
+                      color: connected ? const Color(0xff00D9A6) : Colors.redAccent,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: (connected
-                                  ? const Color(0xff00D9A6)
-                                  : Colors.redAccent)
+                          color: (connected ? const Color(0xff00D9A6) : Colors.redAccent)
                               .withValues(alpha: 0.5),
                           blurRadius: 6,
                           spreadRadius: 1,
@@ -62,9 +64,9 @@ class DeviceStatusCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    connected ? 'Perangkat Terhubung' : 'Perangkat Offline',
-                    style: const TextStyle(
-                      color: Colors.white,
+                    connected ? 'Perangkat Terhubung' : 'Perangkat Belum Terhubung',
+                    style: TextStyle(
+                      color: connected ? Colors.white : Colors.white70,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
@@ -72,7 +74,7 @@ class DeviceStatusCard extends StatelessWidget {
                 ],
               ),
               Icon(
-                connected ? Icons.wifi : Icons.wifi_off,
+                connected ? Icons.wifi : Icons.wifi_off_rounded,
                 color: connected ? const Color(0xff00D9A6) : Colors.grey,
                 size: 20,
               ),
@@ -81,72 +83,91 @@ class DeviceStatusCard extends StatelessWidget {
 
           const SizedBox(height: 14),
 
-          // CONNECTION + SWITCH
+          // CONNECTION BUTTON + SWITCH (Row 2)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              // Tombol di sebelah switch ON/OFF:
+              // Saat belum terhubung -> Tombol "Hubungkan Perangkat"
+              // Saat sudah terhubung -> Tombol "Perangkat Terhubung" (dengan opsi kelola/putuskan)
               Flexible(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xff071426),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: connected ? onDisconnect : onConnect,
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: connected
-                          ? const Color(0xff00D9A6).withValues(alpha: 0.3)
-                          : Colors.white24,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        connected ? Icons.wifi : Icons.bluetooth_disabled,
-                        size: 14,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
                         color: connected
-                            ? const Color(0xff00D9A6)
-                            : Colors.grey,
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          connected ? 'Smart Meter WiFi' : 'Belum terhubung',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: connected ? Colors.white : Colors.white60,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
+                            ? const Color(0xff00D9A6).withValues(alpha: 0.12)
+                            : const Color(0xff007BFF).withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: connected
+                              ? const Color(0xff00D9A6).withValues(alpha: 0.4)
+                              : const Color(0xff007BFF).withValues(alpha: 0.6),
+                          width: 1.2,
                         ),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            connected ? Icons.check_circle_rounded : Icons.sensors_rounded,
+                            size: 15,
+                            color: connected ? const Color(0xff00D9A6) : const Color(0xff00D9FF),
+                          ),
+                          const SizedBox(width: 7),
+                          Flexible(
+                            child: Text(
+                              connected ? 'Perangkat Terhubung' : 'Hubungkan Perangkat',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: connected ? const Color(0xff00D9A6) : Colors.white,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            connected ? Icons.tune_rounded : Icons.arrow_forward_ios_rounded,
+                            size: 11,
+                            color: connected ? const Color(0xff00D9A6) : Colors.white70,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
+
+              // SWITCH ON/OFF
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    power ? 'ON' : 'OFF',
+                    connected && power ? 'ON' : 'OFF',
                     style: TextStyle(
-                      color: power ? const Color(0xff00D9A6) : Colors.white54,
+                      color: connected && power ? const Color(0xff00D9A6) : Colors.white54,
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(width: 4),
-                  Switch(
-                    value: power,
-                    activeThumbColor: const Color(0xff00D9A6),
-                    activeTrackColor:
-                        const Color(0xff00D9A6).withValues(alpha: 0.4),
-                    inactiveThumbColor: Colors.grey,
-                    inactiveTrackColor: Colors.white12,
-                    onChanged: connected ? onChanged : null,
+                  Tooltip(
+                    message: connected ? 'Saklar Smart Meter' : 'Hubungkan ke perangkat terlebih dahulu',
+                    child: Switch(
+                      value: connected && power,
+                      activeThumbColor: const Color(0xff00D9A6),
+                      activeTrackColor: const Color(0xff00D9A6).withValues(alpha: 0.4),
+                      inactiveThumbColor: Colors.grey.shade600,
+                      inactiveTrackColor: Colors.white12,
+                      onChanged: connected ? onChanged : null,
+                    ),
                   ),
                 ],
               ),

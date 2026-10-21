@@ -1,0 +1,38 @@
+{
+  "rules": {
+    "available_years": {
+      ".read": "auth != null || true",
+      ".write": "auth != null"
+    },
+    "energy_data": {
+      "$year": {
+        ".read": "auth != null || true",
+        ".write": "auth != null",
+        "monthly_energy": {
+          "$month": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        },
+        "monthly_cost": {
+          "$month": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        },
+        "summary": {
+          "total_energy": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "total_cost": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        }
+      }
+    },
+    "devices": {
+      "$deviceId": {
+        ".read": "auth != null || true",
+        ".write": "auth != null || true"
+      }
+    }
+  }
+}

@@ -16,10 +16,7 @@ class HomeHeader extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0xff10233F),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.06),
-              width: 1,
-            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06), width: 1),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.2),
@@ -36,10 +33,7 @@ class HomeHeader extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Image.asset(
-                      'assets/simetri_logo.png',
-                      width: isSmall ? 95 : 115,
-                    ),
+                    Image.asset('assets/simetri_logo.png', width: isSmall ? 95 : 115),
                     const SizedBox(height: 12),
                     const Text(
                       'Selamat Datang,',

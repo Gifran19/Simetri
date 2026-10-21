@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'home_screen.dart';
+
+import 'main_navigation_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -9,26 +11,22 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen>
-    with SingleTickerProviderStateMixin {
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
 
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 4),
-    );
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
 
     _controller.forward();
 
-    Timer(const Duration(seconds: 4), () {
+    Timer(const Duration(milliseconds: 1500), () {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
+          MaterialPageRoute(builder: (context) => const MainNavigationScreen()),
         );
       }
     });
@@ -57,11 +55,7 @@ class _SplashScreenState extends State<SplashScreen>
 
                   // LOGO SIMETRI
                   Center(
-                    child: Image.asset(
-                      'assets/simetri_logo.png',
-                      width: 180,
-                      fit: BoxFit.contain,
-                    ),
+                    child: Image.asset('assets/simetri_logo.png', width: 180, fit: BoxFit.contain),
                   ),
 
                   const SizedBox(height: 20),
@@ -90,9 +84,7 @@ class _SplashScreenState extends State<SplashScreen>
                             minHeight: 10,
                             value: _controller.value,
                             backgroundColor: Colors.white12,
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                              Color(0xff00D9A6),
-                            ),
+                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xff00D9A6)),
                           ),
                         );
                       },
@@ -106,11 +98,7 @@ class _SplashScreenState extends State<SplashScreen>
                     child: Text(
                       'Mengambil data konsumsi energi dan status perangkat terhubung...',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Color(0xff9AA7BD),
-                        fontSize: 12,
-                        height: 1.5,
-                      ),
+                      style: TextStyle(color: Color(0xff9AA7BD), fontSize: 12, height: 1.5),
                     ),
                   ),
 

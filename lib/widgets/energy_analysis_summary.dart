@@ -1,15 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 class EnergyAnalysisSummary extends StatelessWidget {
+  final int year;
   final double yearlyEnergy;
   final double averageEnergy;
   final double yearlyCost;
 
+  /// Persentase perubahan pemakaian vs tahun lalu (null = tidak ada data tahun lalu)
+  final double? energyChangePercent;
+
+  /// Persentase perubahan biaya vs tahun lalu (null = tidak ada data tahun lalu)
+  final double? costChangePercent;
+
   const EnergyAnalysisSummary({
     super.key,
+    required this.year,
     required this.yearlyEnergy,
     required this.averageEnergy,
     required this.yearlyCost,
+    this.energyChangePercent,
+    this.costChangePercent,
   });
 
   @override
@@ -20,9 +31,7 @@ class EnergyAnalysisSummary extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xff10233F),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.06),
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.2),
@@ -43,9 +52,9 @@ class EnergyAnalysisSummary extends StatelessWidget {
                   iconBg: const Color(0xff0E3D35),
                   iconColor: const Color(0xff00D9A6),
                   title: 'Total Pemakaian',
-                  value: '${yearlyEnergy.toInt()} kWh',
-                  percentText: '6% lebih rendah',
-                  subText: 'dari tahun 2025',
+                  value: '${yearlyEnergy.toStringAsFixed(1)} kWh',
+                  changePercent: energyChangePercent,
+                  prevYear: year - 1,
                 ),
               ),
               const SizedBox(width: 10),
@@ -55,17 +64,17 @@ class EnergyAnalysisSummary extends StatelessWidget {
                   icon: Icons.insert_chart_rounded,
                   iconBg: const Color(0xff0B3842),
                   iconColor: const Color(0xff00D9A6),
-                  title: 'Rata - rata / bulan',
-                  value: '${averageEnergy.toStringAsFixed(2)} kWh',
-                  percentText: '12% lebih rendah',
-                  subText: 'dari tahun 2025',
+                  title: 'Rata-rata / bulan',
+                  value: '${averageEnergy.toStringAsFixed(1)} kWh',
+                  changePercent: energyChangePercent,
+                  prevYear: year - 1,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 10),
 
-          // Bottom Row: Total Biaya / Total Pemakaian
+          // Bottom Row: Total Biaya
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
@@ -77,10 +86,7 @@ class EnergyAnalysisSummary extends StatelessWidget {
                 Container(
                   width: 40,
                   height: 40,
-                  decoration: const BoxDecoration(
-                    color: Color(0xff123A54),
-                    shape: BoxShape.circle,
-                  ),
+                  decoration: const BoxDecoration(color: Color(0xff123A54), shape: BoxShape.circle),
                   child: const Icon(
                     Icons.account_balance_wallet_rounded,
                     color: Color(0xff00A3FF),
@@ -92,14 +98,14 @@ class EnergyAnalysisSummary extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Total Pemakaian',
+                      'Total Biaya Listrik',
                       style: TextStyle(color: Colors.white60, fontSize: 11),
                     ),
                     const SizedBox(height: 2),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        'Rp ${yearlyCost.toInt().toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}',
+                        'Rp ${NumberFormat('#,###', 'id_ID').format(yearlyCost.toInt())}',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 18,
@@ -110,46 +116,7 @@ class EnergyAnalysisSummary extends StatelessWidget {
                   ],
                 ),
                 const Spacer(),
-                Row(
-                  children: [
-                    Container(
-                      width: 16,
-                      height: 16,
-                      decoration: const BoxDecoration(
-                        color: Color(0xff00D9A6),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.arrow_downward_rounded,
-                          size: 11,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '10% lebih rendah',
-                          style: TextStyle(
-                            color: Color(0xff00D9A6),
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          'dari tahun 2025',
-                          style: TextStyle(
-                            color: Colors.white38,
-                            fontSize: 8.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                if (costChangePercent != null) _buildChangeBadge(costChangePercent!, year - 1),
               ],
             ),
           ),
@@ -164,8 +131,8 @@ class EnergyAnalysisSummary extends StatelessWidget {
     required Color iconColor,
     required String title,
     required String value,
-    required String percentText,
-    required String subText,
+    required double? changePercent,
+    required int prevYear,
   }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
@@ -178,10 +145,7 @@ class EnergyAnalysisSummary extends StatelessWidget {
           Container(
             width: 36,
             height: 36,
-            decoration: BoxDecoration(
-              color: iconBg,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
             child: Icon(icon, color: iconColor, size: 20),
           ),
           const SizedBox(width: 8),
@@ -208,57 +172,60 @@ class EnergyAnalysisSummary extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 12,
-                      height: 12,
-                      decoration: const BoxDecoration(
-                        color: Color(0xff00D9A6),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.arrow_downward_rounded,
-                          size: 8,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            percentText,
-                            style: const TextStyle(
-                              color: Color(0xff00D9A6),
-                              fontSize: 7.5,
-                              fontWeight: FontWeight.bold,
-                              height: 1.1,
-                            ),
-                          ),
-                          Text(
-                            subText,
-                            style: const TextStyle(
-                              color: Colors.white38,
-                              fontSize: 7,
-                              height: 1.0,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                const SizedBox(height: 3),
+                if (changePercent != null)
+                  _buildChangeBadge(changePercent, prevYear)
+                else
+                  Text(
+                    'Data tahun $prevYear tidak tersedia',
+                    style: const TextStyle(color: Colors.white38, fontSize: 7),
+                  ),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildChangeBadge(double changePercent, int prevYear) {
+    final isDown = changePercent <= 0;
+    final color = isDown ? const Color(0xff00D9A6) : Colors.redAccent;
+    final icon = isDown ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded;
+    final absPercent = changePercent.abs().toStringAsFixed(1);
+    final label = isDown ? '$absPercent% lebih rendah' : '$absPercent% lebih tinggi';
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 13,
+          height: 13,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          child: Center(child: Icon(icon, size: 8, color: Colors.black)),
+        ),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 7.5,
+                  fontWeight: FontWeight.bold,
+                  height: 1.1,
+                ),
+              ),
+              Text(
+                'dari tahun $prevYear',
+                style: const TextStyle(color: Colors.white38, fontSize: 7, height: 1.0),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
