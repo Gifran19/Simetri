@@ -1,8 +1,13 @@
+// File: lib/main.dart
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import 'firebase_options.dart';
+import 'screens/splash_screen.dart';
 import 'screens/welcome_screen.dart';
+import 'services/device_service.dart';
+import 'services/sensor_stream_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,11 +21,20 @@ void main() async {
     }
   }
 
-  runApp(const SimentriApp());
+  // Sinkronkan ID perangkat yang tersimpan ke SensorStreamService
+  final pairedId = await DeviceService.getPairedDeviceId();
+  SensorStreamService.instance.setActiveDeviceId(pairedId);
+
+  // Periksa apakah pengguna baru pertama kali membuka aplikasi
+  final hasOnboarded = await DeviceService.hasOnboarded();
+
+  runApp(SimentriApp(initialOnboarded: hasOnboarded));
 }
 
 class SimentriApp extends StatelessWidget {
-  const SimentriApp({super.key});
+  final bool initialOnboarded;
+
+  const SimentriApp({super.key, this.initialOnboarded = false});
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +50,13 @@ class SimentriApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const WelcomeScreen(),
+      home: initialOnboarded
+          ? const SplashScreen()
+          : WelcomeScreen(
+              onGetStarted: () async {
+                await DeviceService.setOnboarded(true);
+              },
+            ),
     );
   }
 }

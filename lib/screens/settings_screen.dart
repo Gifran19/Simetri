@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../services/device_service.dart';
 import '../services/security_service.dart';
+import '../services/sensor_stream_service.dart';
 import '../utils/responsive.dart';
+import '../widgets/connect_device_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VoidCallback? onSettingsChanged;
@@ -258,6 +260,114 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ----------------------------------------------------
+  // MANAJEMEN PAIRING PERANGKAT
+  // ----------------------------------------------------
+  Future<void> _showDisconnectDeviceDialog() async {
+    final authorized = await SecurityService.requestAuthorization(
+      context: context,
+      actionTitle: 'Putuskan Perangkat',
+      actionDescription: 'Verifikasi identitas untuk menghapus pairing perangkat IoT ini.',
+    );
+
+    if (!authorized || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff0D1F3C),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.link_off_rounded, color: Colors.orangeAccent),
+              SizedBox(width: 10),
+              Text('Putuskan Perangkat', style: TextStyle(color: Colors.white, fontSize: 16)),
+            ],
+          ),
+          content: Text(
+            'Apakah Anda yakin ingin memutuskan Smart Meter (${DeviceService.deviceIdNotifier.value})?\n\nAliran sensor akan dihentikan dan status koneksi akan dinonaktifkan.',
+            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Batal', style: TextStyle(color: Colors.white54)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+              child: const Text('Putuskan', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed == true) {
+      SensorStreamService.instance.stopStreaming();
+      SensorStreamService.instance.pauseStreamingToZero();
+      await DeviceService.clearPairedDevice();
+
+      if (mounted) {
+        setState(() {});
+        messenger.showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xff0D1F3C),
+            behavior: SnackBarBehavior.floating,
+            content: Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: Color(0xff00D9A6)),
+                SizedBox(width: 10),
+                Text('Pairing perangkat berhasil diputuskan.'),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _showPairingExplanation() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xff0D1F3C),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.wifi_tethering_rounded, color: Color(0xff00D9A6)),
+            SizedBox(width: 10),
+            Text('Pairing Tanpa Akun', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Cara Kerja Komunikasi:',
+              style: TextStyle(color: Color(0xff00D9A6), fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            SizedBox(height: 6),
+            Text(
+              '• ESP32 dan ponsel tidak harus satu jaringan Wi-Fi.\n• ESP32 mengirim data ke Firebase RTDB dengan ID perangkat Anda.\n• Aplikasi membaca data dari ID tersebut secara otomatis.\n• Keamanan fisik relay dan tarif dilindungi oleh PIN lokal di ponsel ini.',
+              style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.5),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff00D9A6)),
+            child: const Text('Mengerti', style: TextStyle(color: Color(0xff071426), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isWide = !Responsive.isMobile(context);
@@ -283,8 +393,90 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: ListView(
             physics: const BouncingScrollPhysics(),
             children: [
+              // SECTION 0: PERANGKAT IOT TERHUBUNG (PAIRING MANDIRI)
+              _buildSectionHeader('Perangkat IoT Terhubung (Pairing Mandiri)'),
+              ValueListenableBuilder<String>(
+                valueListenable: DeviceService.deviceIdNotifier,
+                builder: (context, deviceId, _) {
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: DeviceService.connectionNotifier,
+                    builder: (context, isConnected, _) {
+                      return _buildCardContainer([
+                        ListTile(
+                          leading: const Icon(Icons.router_rounded, color: Color(0xff00D9A6), size: 30),
+                          title: Text(
+                            'ID Perangkat: $deviceId',
+                            style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: Text(
+                            'Node RTDB: devices/$deviceId • ${isConnected ? "Terhubung" : "Offline"}',
+                            style: const TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: isConnected
+                                  ? const Color(0xff00D9A6).withValues(alpha: 0.15)
+                                  : Colors.white12,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              isConnected ? 'Aktif' : 'Offline',
+                              style: TextStyle(
+                                color: isConnected ? const Color(0xff00D9A6) : Colors.white38,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const Divider(color: Colors.white10),
+                        ListTile(
+                          leading: const Icon(Icons.sync_alt_rounded, color: Color(0xff00D9A6)),
+                          title: const Text('Ganti Kode Pairing Perangkat', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                          subtitle: const Text('Masukkan ID perangkat ESP32 yang ingin dipantau', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white38),
+                          onTap: () {
+                            showModalBottomSheet(
+                              context: context,
+                              isScrollControlled: true,
+                              backgroundColor: Colors.transparent,
+                              builder: (ctx) => ConnectDeviceSheet(
+                                onConnected: (_) {
+                                  setState(() {});
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                        const Divider(color: Colors.white10),
+                        ListTile(
+                          leading: const Icon(Icons.info_outline_rounded, color: Color(0xff00D9A6)),
+                          title: const Text('Cara Kerja Pairing Mandiri', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                          subtitle: const Text('Sinkronisasi perangkat tanpa login atau registrasi', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          trailing: const Icon(Icons.chevron_right_rounded, color: Colors.white38),
+                          onTap: _showPairingExplanation,
+                        ),
+                        if (isConnected) ...[
+                          const Divider(color: Colors.white10),
+                          ListTile(
+                            leading: const Icon(Icons.link_off_rounded, color: Colors.orangeAccent),
+                            title: const Text('Putuskan Perangkat', style: TextStyle(color: Colors.orangeAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                            subtitle: const Text('Hentikan pemantauan telemetri perangkat ini', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                            trailing: const Icon(Icons.chevron_right_rounded, color: Colors.orangeAccent),
+                            onTap: _showDisconnectDeviceDialog,
+                          ),
+                        ],
+                      ]);
+                    },
+                  );
+                },
+              ),
+
+              const SizedBox(height: 20),
+
               // SECTION 1: KEAMANAN & OTORISASI
-              _buildSectionHeader('Keamanan & Otorisasi Pengguna'),
+              _buildSectionHeader('Keamanan & Otorisasi Pengguna (Lokal)'),
               _buildCardContainer([
                 ListTile(
                   leading: const Icon(Icons.pin_rounded, color: Color(0xff00D9A6)),

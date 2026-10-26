@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 class DeviceStatusCard extends StatelessWidget {
   final bool connected;
   final bool power;
+  final String? deviceId;
   final ValueChanged<bool> onChanged;
   final VoidCallback? onConnect;
   final VoidCallback? onDisconnect;
@@ -11,6 +12,7 @@ class DeviceStatusCard extends StatelessWidget {
     super.key,
     required this.connected,
     required this.power,
+    this.deviceId,
     required this.onChanged,
     this.onConnect,
     this.onDisconnect,
@@ -64,7 +66,9 @@ class DeviceStatusCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    connected ? 'Perangkat Terhubung' : 'Perangkat Belum Terhubung',
+                    connected
+                        ? (deviceId != null ? 'Smart Meter ($deviceId)' : 'Perangkat Terhubung')
+                        : 'Perangkat Belum Terhubung',
                     style: TextStyle(
                       color: connected ? Colors.white : Colors.white70,
                       fontSize: 14,

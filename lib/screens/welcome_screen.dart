@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'splash_screen.dart';
 
 class WelcomeScreen extends StatelessWidget {
-  const WelcomeScreen({super.key});
+  final VoidCallback? onGetStarted;
+
+  const WelcomeScreen({super.key, this.onGetStarted});
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +49,10 @@ class WelcomeScreen extends StatelessWidget {
                               height: 52,
                               child: ElevatedButton(
                                 onPressed: () {
-                                  Navigator.push(
+                                  if (onGetStarted != null) {
+                                    onGetStarted!();
+                                  }
+                                  Navigator.pushReplacement(
                                     context,
                                     MaterialPageRoute(builder: (context) => const SplashScreen()),
                                   );

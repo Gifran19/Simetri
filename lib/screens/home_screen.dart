@@ -51,14 +51,22 @@ class _HomeScreenState extends State<HomeScreen> {
     _initSensorStream();
     _loadSavedConnectionState();
     DeviceService.connectionNotifier.addListener(_onConnectionNotifierChanged);
+    DeviceService.deviceIdNotifier.addListener(_onDeviceIdChanged);
   }
 
   @override
   void dispose() {
     DeviceService.connectionNotifier.removeListener(_onConnectionNotifierChanged);
+    DeviceService.deviceIdNotifier.removeListener(_onDeviceIdChanged);
     _sensorSubscription?.cancel();
     SensorStreamService.instance.stopStreaming();
     super.dispose();
+  }
+
+  void _onDeviceIdChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _onConnectionNotifierChanged() {
@@ -740,6 +748,7 @@ class _HomeScreenState extends State<HomeScreen> {
         DeviceStatusCard(
           connected: _isConnected,
           power: _devicePower,
+          deviceId: DeviceService.deviceIdNotifier.value,
           onChanged: togglePower,
           onConnect: _openConnectSheet,
           onDisconnect: _showDisconnectDialog,
@@ -837,6 +846,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   DeviceStatusCard(
                     connected: _isConnected,
                     power: _devicePower,
+                    deviceId: DeviceService.deviceIdNotifier.value,
                     onChanged: togglePower,
                     onConnect: _openConnectSheet,
                     onDisconnect: _showDisconnectDialog,

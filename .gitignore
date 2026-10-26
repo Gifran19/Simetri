@@ -18,9 +18,7 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
+# VS Code
 #.vscode/
 
 # Flutter/Dart/Pub related
@@ -39,10 +37,38 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
-# Android Studio will place build artifacts here
+# Android Studio build artifacts
 /android/app/debug
 /android/app/profile
 /android/app/release
 
 # Widget Preview related
 .widget_preview/
+
+# ============================================================
+# SIMETRI – FILE SENSITIF (JANGAN DI-COMMIT)
+# ============================================================
+
+# Firebase credentials – gunakan firebase_options.example.dart sebagai template
+lib/firebase_options.dart
+
+# Google Services config (berisi API key)
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Node.js (firebase-admin backend / tools)
+node_modules/
+package-lock.json
+
+# Simetri_Review – folder review lokal, bukan bagian source code
+Simetri_Review/
+
+# ============================================================
+# BACKUP FIRMWARE – tidak di-track di repo utama
+# ============================================================
+firmware_iot/*_backup/

@@ -20,7 +20,6 @@ class PlnTariffPreset {
     required this.description,
   });
 }
-
 class DeviceService {
   static const String _keyConnected = 'simetri_is_connected';
   static const String _keyPower = 'simetri_device_power';
@@ -28,6 +27,8 @@ class DeviceService {
   static const String _keyMonthlyBudget = 'simetri_monthly_budget_rp';
   static const String _keyBiometricEnabled = 'simetri_biometric_enabled';
   static const String _keyHasOnboarded = 'simetri_has_onboarded';
+  static const String _keyDeviceId = 'simetri_paired_device_id';
+  static const String defaultDeviceId = 'simetri_01';
 
   // =========================
   // PRESET RESMI PLN INDONESIA
@@ -120,6 +121,35 @@ class DeviceService {
   static final ValueNotifier<bool> connectionNotifier = ValueNotifier<bool>(false);
   static final ValueNotifier<bool> powerNotifier = ValueNotifier<bool>(true);
   static final ValueNotifier<double> budgetNotifier = ValueNotifier<double>(300000.0);
+  static final ValueNotifier<String> deviceIdNotifier = ValueNotifier<String>(defaultDeviceId);
+
+  /// Ambil Kode / ID Perangkat ESP32 yang terhubung
+  static Future<String> getPairedDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final deviceId = prefs.getString(_keyDeviceId) ?? defaultDeviceId;
+    if (deviceIdNotifier.value != deviceId) {
+      deviceIdNotifier.value = deviceId;
+    }
+    return deviceId;
+  }
+
+  /// Simpan Kode / ID Perangkat ESP32 hasil pairing
+  static Future<void> savePairedDeviceId(String deviceId) async {
+    final cleanId = deviceId.trim();
+    if (cleanId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyDeviceId, cleanId);
+    deviceIdNotifier.value = cleanId;
+  }
+
+  /// Putuskan dan bersihkan data pairing perangkat
+  static Future<void> clearPairedDevice() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyDeviceId);
+    await saveConnectionState(false);
+    await saveDevicePower(false);
+    deviceIdNotifier.value = defaultDeviceId;
+  }
 
   /// Cek apakah pengguna sebelumnya sudah pernah menghubungkan perangkat
   static Future<bool> isDeviceConnected() async {

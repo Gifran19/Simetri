@@ -22,9 +22,26 @@ class SensorStreamService {
   static final SensorStreamService instance = SensorStreamService._internal();
   SensorStreamService._internal();
 
-  static const String rtdbDevicePath = 'devices/simetri_01';
-  static const String rtdbLivePath = '$rtdbDevicePath/live';
-  static const String rtdbControlPath = '$rtdbDevicePath/control';
+  String _activeDeviceId = 'simetri_01';
+  String get activeDeviceId => _activeDeviceId;
+
+  String get rtdbDevicePath => 'devices/$_activeDeviceId';
+  String get rtdbLivePath => '$rtdbDevicePath/live';
+  String get rtdbControlPath => '$rtdbDevicePath/control';
+
+  /// Ganti target perangkat ESP32 secara dinamis
+  void setActiveDeviceId(String deviceId) {
+    final clean = deviceId.trim();
+    if (clean.isNotEmpty && _activeDeviceId != clean) {
+      _activeDeviceId = clean;
+      _hasReceivedFirebaseData = false;
+      _lastFirebaseReceiveTime = null;
+      if (_isStreamingActive) {
+        stopStreaming();
+        startStreaming();
+      }
+    }
+  }
 
   final StreamController<SensorReading> _controller = StreamController<SensorReading>.broadcast();
   Stream<SensorReading> get readingStream => _controller.stream;
@@ -54,9 +71,9 @@ class SensorStreamService {
   /// Label sumber data saat ini
   String get streamSourceLabel {
     if (isReceivingRealFirebase) {
-      return 'Firebase RTDB (Live ESP32)';
+      return 'Firebase RTDB (ESP32: $_activeDeviceId)';
     } else if (DefaultFirebaseOptions.isConfigured) {
-      return 'Simulasi (Menunggu ESP32 Online)';
+      return 'Simulasi (Menunggu $_activeDeviceId Online)';
     } else {
       return 'Simulasi Live (Firebase Belum Dikonfigurasi)';
     }
