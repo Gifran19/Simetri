@@ -23,11 +23,11 @@
     "devices": {
       "$deviceId": {
         "meta": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": false
         },
         "live": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": "auth != null && (auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           "voltage": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
@@ -49,12 +49,12 @@
           }
         },
         "status": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": "auth != null && (auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())"
         },
         "control": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
-          ".write": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".write": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active'",
           "power": {
             ".validate": "newData.isBoolean()"
           },
@@ -68,15 +68,10 @@
       }
     },
 
-    "available_years": {
-      ".read": "auth != null",
-      ".write": false
-    },
-
     "energy_data": {
-      "$deviceIdOrYear": {
-        ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceIdOrYear).exists() || auth.uid === 'esp32_' + $deviceIdOrYear || root.child('available_years').child($deviceIdOrYear).exists())",
-        ".write": "auth != null && (auth.uid === 'esp32_' + $deviceIdOrYear || auth.uid === root.child('devices').child($deviceIdOrYear).child('meta').child('deviceUid').val())"
+      "$deviceId": {
+        ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+        ".write": "auth != null && (auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())"
       }
     }
   }

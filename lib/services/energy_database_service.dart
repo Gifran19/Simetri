@@ -5,6 +5,7 @@ import 'package:firebase_database/firebase_database.dart';
 
 import '../firebase_options.dart';
 import '../models/yearly_energy_data.dart';
+import 'device_service.dart';
 
 /// Service untuk mengambil dan menyimpan data energi ke Firebase Realtime Database.
 ///
@@ -55,18 +56,29 @@ class EnergyDatabaseService {
     }
   }
 
+  // Helper internal untuk mendapatkan deviceId aktif
+  Future<String> _resolveDeviceId([String? deviceId]) async {
+    if (deviceId != null && deviceId.trim().isNotEmpty) {
+      return deviceId.trim();
+    }
+    return await DeviceService.getPairedDeviceId();
+  }
+
   // -------------------------------------------------------
-  // Ambil daftar tahun yang tersedia di database
+  // Ambil daftar tahun yang tersedia di database per perangkat
   // -------------------------------------------------------
-  Future<List<int>> fetchAvailableYears() async {
+  Future<List<int>> fetchAvailableYears([String? deviceId]) async {
     final db = _db;
     if (db == null) {
-      // Firebase belum dikonfigurasi → langsung return data dummy dalam 0 ms
       return [2026, 2025, 2024];
     }
 
     try {
-      final snapshot = await db.ref('available_years').get().timeout(const Duration(seconds: 2));
+      final devId = await _resolveDeviceId(deviceId);
+      final snapshot = await db
+          .ref('energy_data/$devId/available_years')
+          .get()
+          .timeout(const Duration(seconds: 2));
 
       if (!snapshot.exists || snapshot.value == null) {
         return [2026, 2025, 2024];
@@ -84,24 +96,25 @@ class EnergyDatabaseService {
       }
       return [2026, 2025, 2024];
     } catch (e) {
-      // Fallback ke dummy jika Firebase offline/timeout
       return [2026, 2025, 2024];
     }
   }
 
   // -------------------------------------------------------
-  // Ambil data energi untuk tahun tertentu
+  // Ambil data energi untuk tahun tertentu per perangkat
   // -------------------------------------------------------
-  Future<YearlyEnergyData> fetchYearlyData(int year) async {
+  Future<YearlyEnergyData> fetchYearlyData(int year, [String? deviceId]) async {
     final db = _db;
     if (db == null) {
-      // Firebase belum dikonfigurasi → langsung return data dummy dalam 0 ms
       return YearlyEnergyData.dummy(year);
     }
 
     try {
-      // Ambil data tahun ini dengan timeout 2 detik
-      final snapshot = await db.ref('energy_data/$year').get().timeout(const Duration(seconds: 2));
+      final devId = await _resolveDeviceId(deviceId);
+      final snapshot = await db
+          .ref('energy_data/$devId/$year')
+          .get()
+          .timeout(const Duration(seconds: 2));
 
       if (!snapshot.exists || snapshot.value == null) {
         return YearlyEnergyData.dummy(year);
@@ -113,7 +126,7 @@ class EnergyDatabaseService {
       YearlyEnergyData? prevData;
       try {
         final prevSnapshot = await db
-            .ref('energy_data/${year - 1}')
+            .ref('energy_data/$devId/${year - 1}')
             .get()
             .timeout(const Duration(seconds: 1));
         if (prevSnapshot.exists && prevSnapshot.value != null) {
@@ -135,13 +148,16 @@ class EnergyDatabaseService {
   // -------------------------------------------------------
   // Stream real-time data energi (untuk live monitoring)
   // -------------------------------------------------------
-  Stream<YearlyEnergyData> streamYearlyData(int year) {
+  Stream<YearlyEnergyData> streamYearlyData(int year, [String? deviceId]) async* {
     final db = _db;
     if (db == null) {
-      return Stream.value(YearlyEnergyData.dummy(year));
+      yield YearlyEnergyData.dummy(year);
+      return;
     }
 
-    return db.ref('energy_data/$year').onValue.asyncMap((event) async {
+    final devId = await _resolveDeviceId(deviceId);
+
+    yield* db.ref('energy_data/$devId/$year').onValue.asyncMap((event) async {
       if (!event.snapshot.exists || event.snapshot.value == null) {
         return YearlyEnergyData.dummy(year);
       }
@@ -150,7 +166,7 @@ class EnergyDatabaseService {
       YearlyEnergyData? prevData;
       try {
         final prevSnapshot = await db
-            .ref('energy_data/${year - 1}')
+            .ref('energy_data/$devId/${year - 1}')
             .get()
             .timeout(const Duration(seconds: 1));
         if (prevSnapshot.exists && prevSnapshot.value != null) {
@@ -168,40 +184,37 @@ class EnergyDatabaseService {
   // -------------------------------------------------------
   // Tulis data energi dari ESP32 (dipanggil saat IoT kirim data)
   // -------------------------------------------------------
-  /// Simpan pembacaan energi bulanan dari ESP32.
-  /// [year]        → tahun (misal 2026)
-  /// [month]       → bulan 0-11 (0 = Jan)
-  /// [energyKwh]   → total pemakaian kWh bulan itu
-  /// [costRp]      → total biaya bulan itu dalam Rupiah
   Future<void> writeMonthlyReading({
     required int year,
     required int month,
     required double energyKwh,
     required double costRp,
+    String? deviceId,
   }) async {
     final db = _db;
     if (db == null) return;
 
-    final ref = db.ref('energy_data/$year');
+    final devId = await _resolveDeviceId(deviceId);
+    final ref = db.ref('energy_data/$devId/$year');
 
     await ref.update({'monthly_energy/$month': energyKwh, 'monthly_cost/$month': costRp});
 
     // Update summary
-    await _updateYearlySummary(year);
+    await _updateYearlySummary(year, devId);
 
-    // Pastikan tahun ini ada di daftar available_years
-    await _ensureYearRegistered(year);
+    // Pastikan tahun ini ada di daftar available_years per perangkat
+    await _ensureYearRegistered(year, devId);
   }
 
   // -------------------------------------------------------
   // Helper: hitung ulang summary tahunan
   // -------------------------------------------------------
-  Future<void> _updateYearlySummary(int year) async {
+  Future<void> _updateYearlySummary(int year, String devId) async {
     final db = _db;
     if (db == null) return;
 
-    final energySnap = await db.ref('energy_data/$year/monthly_energy').get();
-    final costSnap = await db.ref('energy_data/$year/monthly_cost').get();
+    final energySnap = await db.ref('energy_data/$devId/$year/monthly_energy').get();
+    final costSnap = await db.ref('energy_data/$devId/$year/monthly_cost').get();
 
     double totalEnergy = 0;
     double totalCost = 0;
@@ -216,7 +229,7 @@ class EnergyDatabaseService {
       totalCost = costMap.values.whereType<num>().fold(0.0, (a, b) => a + b.toDouble());
     }
 
-    await db.ref('energy_data/$year/summary').update({
+    await db.ref('energy_data/$devId/$year/summary').update({
       'total_energy': totalEnergy,
       'total_cost': totalCost,
       'last_updated': ServerValue.timestamp,
@@ -224,13 +237,13 @@ class EnergyDatabaseService {
   }
 
   // -------------------------------------------------------
-  // Helper: daftarkan tahun ke node available_years
+  // Helper: daftarkan tahun ke node available_years per perangkat
   // -------------------------------------------------------
-  Future<void> _ensureYearRegistered(int year) async {
+  Future<void> _ensureYearRegistered(int year, String devId) async {
     final db = _db;
     if (db == null) return;
 
-    final snapshot = await db.ref('available_years').get();
+    final snapshot = await db.ref('energy_data/$devId/available_years').get();
     List<int> years = [];
 
     if (snapshot.exists && snapshot.value != null) {
@@ -245,7 +258,7 @@ class EnergyDatabaseService {
     if (!years.contains(year)) {
       years.add(year);
       years.sort();
-      await db.ref('available_years').set(years);
+      await db.ref('energy_data/$devId/available_years').set(years);
     }
   }
 }

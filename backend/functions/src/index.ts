@@ -2,9 +2,19 @@ import * as admin from 'firebase-admin';
 import { onCall } from 'firebase-functions/v2/https';
 import { ClaimDeviceRequest, handleClaimDevice } from './pairing';
 
-// Inisialisasi Firebase Admin jika belum diinisialisasi
+// Inisialisasi Firebase Admin dengan namespace konsisten
+const DATABASE_NAMESPACE = process.env.FIREBASE_DATABASE_NAMESPACE || 'simetri-app-default-rtdb';
+const EMULATOR_HOST = process.env.FIREBASE_DATABASE_EMULATOR_HOST || '127.0.0.1:9000';
+
 if (admin.apps.length === 0) {
-  admin.initializeApp();
+  if (process.env.FUNCTIONS_EMULATOR || process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
+    admin.initializeApp({
+      projectId: 'simetri-app',
+      databaseURL: `http://${EMULATOR_HOST}?ns=${DATABASE_NAMESPACE}`,
+    });
+  } else {
+    admin.initializeApp();
+  }
 }
 
 const db = admin.database();

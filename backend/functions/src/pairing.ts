@@ -28,6 +28,7 @@ export interface DeviceMetaData {
   deviceId: string;
   label?: string;
   ownerUid?: string | null;
+  claimOpId?: string | null;
   claimedAt?: number | null;
   registeredAt?: number;
   activePairingHash?: string;
@@ -38,40 +39,41 @@ const MAX_FAILED_ATTEMPTS = 5;
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000; // 5 menit
 
 /**
- * KETERBATASAN KEAMANAN RATE LIMITING BERBASIS UID ANONIM:
- * 
- * Pembatasan laju (rate limiting) di bawah ini dihitung per UID Anonim Firebase Authentication.
- * Keterbatasan Inheren:
- * 1. Jika penyerang membersihkan cache / local storage aplikasi, Firebase Auth akan menghasilkan
- *    UID anonim baru. Hal ini mereset counter rate limit pada UID tersebut.
- * 2. Mitigasi berlapis (Defense-in-Depth) yang direkomendasikan untuk tahap produksi:
- *    a. Menerapkan Firebase App Check (Play Integrity pada Android, DeviceCheck pada iOS)
- *       untuk memastikan request hanya berasal dari aplikasi resmi yang belum dimodifikasi.
- *    b. Rate limiting berbasis IP di tingkat Gateway / Cloud Armor jika callable diakses lewat HTTPS publik.
- *    c. Penggunaan kode pairing kriptografis dengan entropi tinggi (misal SHA-256 dari 8-12 karakter acak),
- *       dan masa berlaku singkat (misal 15-60 menit) sehingga serangan brute force tidak memungkinkan
- *       dalam ruang waktu validitas kode.
+ * Memeriksa apakah UID pemanggil saat ini sedang dalam status terblokir oleh rate limiter.
+ * PENTING: Pemeriksaan ini dijalankan sebelum memproses kode apapun.
  */
-export async function checkAndRecordRateLimit(
+export async function assertCallerNotRateLimited(
   rateLimitRef: admin.database.Reference,
   now: number
 ): Promise<void> {
-  let isExceeded = false;
-  let remainingMinutes = 0;
+  const snapshot = await rateLimitRef.get();
+  if (!snapshot.exists()) return;
 
-  // Gunakan transaksi agar tidak terjadi lost update saat permintaan bersamaan (race condition)
+  const data = snapshot.val();
+  const attempts = data?.attempts || 0;
+  const lastAttempt = data?.lastAttempt || 0;
+
+  if (attempts >= MAX_FAILED_ATTEMPTS && now - lastAttempt < RATE_LIMIT_WINDOW_MS) {
+    const remainingMinutes = Math.ceil(
+      (RATE_LIMIT_WINDOW_MS - (now - lastAttempt)) / 60000
+    );
+    throw new HttpsError(
+      'resource-exhausted',
+      `Terlalu banyak percobaan gagal. Akun Anda sedang dibatasi. Silakan tunggu ${remainingMinutes} menit sebelum mencoba lagi.`
+    );
+  }
+}
+
+/**
+ * Mencatat kegagalan percobaan klaim secara transaksional agar aman dari race condition.
+ */
+export async function recordFailedAttemptTx(
+  rateLimitRef: admin.database.Reference,
+  now: number
+): Promise<void> {
   await rateLimitRef.transaction((current) => {
     if (!current || now - (current.lastAttempt || 0) > RATE_LIMIT_WINDOW_MS) {
-      // Jendela baru atau pertama kali
       return { attempts: 1, lastAttempt: now };
-    }
-
-    if (current.attempts >= MAX_FAILED_ATTEMPTS) {
-      isExceeded = true;
-      remainingMinutes = Math.ceil(
-        (RATE_LIMIT_WINDOW_MS - (now - current.lastAttempt)) / 60000
-      );
-      return; // batalkan transaksi tanpa menambah hitungan
     }
 
     return {
@@ -79,20 +81,13 @@ export async function checkAndRecordRateLimit(
       lastAttempt: now,
     };
   });
-
-  if (isExceeded) {
-    throw new HttpsError(
-      'resource-exhausted',
-      `Terlalu banyak percobaan gagal. Silakan tunggu ${remainingMinutes} menit sebelum mencoba lagi.`
-    );
-  }
 }
 
 export async function handleClaimDevice(
   request: CallableRequest<ClaimDeviceRequest>,
   db: admin.database.Database
 ): Promise<ClaimDeviceResponse> {
-  // 1. Validasi Autentikasi Pemanggil (Anonymous UID)
+  // 1. Validasi Autentikasi Pemanggil
   if (!request.auth || !request.auth.uid) {
     throw new HttpsError(
       'unauthenticated',
@@ -107,22 +102,27 @@ export async function handleClaimDevice(
     throw new HttpsError('invalid-argument', 'Kode pairing wajib diisi.');
   }
 
-  const normalizedCode = rawCode.trim().toUpperCase();
-  if (normalizedCode.length < 6 || normalizedCode.length > 32) {
-    throw new HttpsError('invalid-argument', 'Format kode pairing tidak valid.');
-  }
-
   const now = Date.now();
   const rateLimitRef = db.ref(`pairing_rate_limits/${callerUid}`);
 
-  // 2. Hash Kode Pairing Menggunakan SHA-256
+  // 2. PRIORITAS 5: Periksa status rate-limit SEBELUM memproses semua kode.
+  // Jika pemanggil sedang dalam status terblokir, kode valid sekalipun harus langsung ditolak!
+  await assertCallerNotRateLimited(rateLimitRef, now);
+
+  const normalizedCode = rawCode.trim().toUpperCase();
+  if (normalizedCode.length < 6 || normalizedCode.length > 32) {
+    await recordFailedAttemptTx(rateLimitRef, now);
+    throw new HttpsError('invalid-argument', 'Format kode pairing tidak valid.');
+  }
+
+  // 3. Hash Kode Pairing Menggunakan SHA-256
   const hash = crypto.createHash('sha256').update(normalizedCode).digest('hex');
   const secretRef = db.ref(`pairing_secrets/${hash}`);
 
-  // 3. Verifikasi Keberadaan Secret di Database
+  // 4. Verifikasi Keberadaan Secret di Database
   const secretSnap = await secretRef.get();
   if (!secretSnap.exists()) {
-    await checkAndRecordRateLimit(rateLimitRef, now);
+    await recordFailedAttemptTx(rateLimitRef, now);
     throw new HttpsError(
       'not-found',
       'Kode pairing tidak ditemukan atau salah. Periksa kembali kode Anda.'
@@ -132,19 +132,18 @@ export async function handleClaimDevice(
   const secretData = secretSnap.val() as PairingSecretData;
   const deviceId = secretData.deviceId;
 
-  // 4. Periksa apakah kode telah dicabut (revoked) oleh admin / diterbitkan kode baru
+  // 5. Periksa apakah kode telah dicabut (revoked) oleh admin
   if (secretData.status === 'revoked') {
-    await checkAndRecordRateLimit(rateLimitRef, now);
+    await recordFailedAttemptTx(rateLimitRef, now);
     throw new HttpsError(
       'failed-precondition',
       'Kode pairing ini telah dicabut atau digantikan oleh kode baru.'
     );
   }
 
-  // 5. Penanganan Idempotensi & Pemulihan (Recovery) Klaim yang Belum Lengkap:
-  // Jika secret sudah ditandai used oleh callerUid yang sama
+  // 6. PRIORITAS 4: Penanganan Idempotensi, Retry, dan Pemulihan (Recovery) Aman
   if (secretData.used && secretData.usedBy === callerUid) {
-    // Periksa apakah izin untuk UID ini sengaja dicabut
+    // 6a. Cek apakah izin pengguna sengaja dicabut
     const permSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
     if (permSnap.exists() && permSnap.val()?.status === 'revoked') {
       throw new HttpsError(
@@ -153,11 +152,18 @@ export async function handleClaimDevice(
       );
     }
 
-    // Jika terjadi kegagalan di tengah jalan (misal permissions belum tersimpan atau ownerUid belum terpasang),
-    // kita pulihkan data tersebut secara utuh sekarang.
+    // 6b. Cek metadata perangkat: RECOVERY TIDAK BOLEH MENIMPA PEMILIK BARU!
     const metaSnap = await db.ref(`devices/${deviceId}/meta`).get();
     const currentMeta = (metaSnap.val() || {}) as DeviceMetaData;
 
+    if (currentMeta.ownerUid && currentMeta.ownerUid !== callerUid) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Perangkat ini telah dipindahtangankan ke pemilik baru.'
+      );
+    }
+
+    // 6c. Pulihkan jika belum lengkap (misal akibat crash jaringan sebelum permissions tersimpan)
     if (!permSnap.exists() || currentMeta.ownerUid !== callerUid) {
       const recoveryUpdates: Record<string, unknown> = {};
       recoveryUpdates[`permissions/${callerUid}/${deviceId}`] = {
@@ -177,9 +183,9 @@ export async function handleClaimDevice(
     };
   }
 
-  // Jika sudah used oleh orang lain
+  // Jika sudah terpakai oleh pengguna lain
   if (secretData.used && secretData.usedBy !== callerUid) {
-    await checkAndRecordRateLimit(rateLimitRef, now);
+    await recordFailedAttemptTx(rateLimitRef, now);
     throw new HttpsError(
       'failed-precondition',
       'Kode pairing ini sudah pernah digunakan sebelumnya.'
@@ -188,51 +194,52 @@ export async function handleClaimDevice(
 
   // Jika kode sudah kedaluwarsa
   if (now > secretData.expiresAt) {
-    await checkAndRecordRateLimit(rateLimitRef, now);
+    await recordFailedAttemptTx(rateLimitRef, now);
     throw new HttpsError(
       'deadline-exceeded',
       'Kode pairing telah kedaluwarsa. Mintalah kode baru.'
     );
   }
 
-  // 6. KUNCI KEPEMILIKAN TINGKAT PERANGKAT:
-  // Dua kode berbeda untuk perangkat yang sama tidak boleh memberikan kepemilikan kepada dua UID berbeda.
-  // Gunakan transaksi pada node device lock: devices/{deviceId}/meta/ownerUid
+  // 7. KUNCI KEPEMILIKAN TINGKAT PERANGKAT DENGAN CLAIM OPERATION ID
+  // Mencegah dua kode berbeda mengklaim perangkat yang sama
   const metaRef = db.ref(`devices/${deviceId}/meta`);
+  const claimOpId = crypto.randomUUID();
   let deviceOwnershipConflict = false;
 
   const deviceLockResult = await metaRef.transaction((currentMeta: DeviceMetaData | null) => {
     if (currentMeta === null) {
-      // Metadata perangkat belum ada, buat baru
       return {
         deviceId,
         ownerUid: callerUid,
+        claimOpId,
         claimedAt: now,
       };
     }
 
-    // Jika perangkat sudah memiliki pemilik aktif dan bukan callerUid yang sama
+    // Jika perangkat sudah memiliki pemilik aktif dan bukan callerUid
     if (currentMeta.ownerUid && currentMeta.ownerUid !== callerUid) {
       deviceOwnershipConflict = true;
-      return; // batalkan transaksi
+      return; // batalkan
     }
 
     return {
       ...currentMeta,
       ownerUid: callerUid,
+      claimOpId,
       claimedAt: now,
     };
   });
 
   if (deviceOwnershipConflict || !deviceLockResult.committed) {
-    await checkAndRecordRateLimit(rateLimitRef, now);
+    await recordFailedAttemptTx(rateLimitRef, now);
     throw new HttpsError(
       'failed-precondition',
       'Perangkat ini sudah terdaftar dan dimiliki oleh pengguna lain.'
     );
   }
 
-  // 7. Transaksi Atomik pada pairing_secrets untuk mengklaim kode
+  // 8. TRANSAKSI ATOMIK PADA PAIRING SECRETS
   let secretFailureReason: 'already_used' | 'expired' | 'revoked' | null = null;
 
   try {
@@ -243,17 +250,17 @@ export async function handleClaimDevice(
 
       if (currentSecret.status === 'revoked') {
         secretFailureReason = 'revoked';
-        return; // batalkan
+        return;
       }
 
       if (currentSecret.used) {
         secretFailureReason = 'already_used';
-        return; // batalkan
+        return;
       }
 
       if (now > currentSecret.expiresAt) {
         secretFailureReason = 'expired';
-        return; // batalkan
+        return;
       }
 
       return {
@@ -266,15 +273,35 @@ export async function handleClaimDevice(
     });
 
     if (!txSecretResult.committed || !txSecretResult.snapshot.exists()) {
-      // Rollback kepemilikan perangkat jika klaim secret gagal
-      await metaRef.child('ownerUid').transaction((currentOwner) => {
-        if (currentOwner === callerUid) {
-          return null; // kembalikan ke null
+      const currentSecretVal = txSecretResult.snapshot.val() as PairingSecretData | null;
+      if (currentSecretVal && currentSecretVal.usedBy === callerUid) {
+        // Permintaan paralel dari UID yang sama baru saja menyelesaikan klaim dengan sukses.
+        // Kembalikan respons sukses yang konsisten tanpa rollback.
+        return {
+          success: true,
+          deviceId,
+          message: 'Perangkat berhasil dipasangkan ke akun Anda.',
+        };
+      }
+
+      // ROLLBACK AMAN: Hanya rollback jika claimOpId masih milik operasi INI!
+      await metaRef.transaction((currentMeta: DeviceMetaData | null) => {
+        if (
+          currentMeta &&
+          currentMeta.claimOpId === claimOpId &&
+          currentMeta.ownerUid === callerUid
+        ) {
+          return {
+            ...currentMeta,
+            ownerUid: null,
+            claimOpId: null,
+            claimedAt: null,
+          };
         }
-        return currentOwner;
+        return currentMeta;
       });
 
-      await checkAndRecordRateLimit(rateLimitRef, now);
+      await recordFailedAttemptTx(rateLimitRef, now);
 
       if (secretFailureReason === 'revoked') {
         throw new HttpsError(
@@ -299,14 +326,14 @@ export async function handleClaimDevice(
       }
     }
 
-    // 8. Menetapkan Izin Pengguna di database secara atomik
+    // 9. Menetapkan Izin Pengguna Secara Atomik di Database
     const multiPathUpdates: Record<string, unknown> = {};
     multiPathUpdates[`permissions/${callerUid}/${deviceId}`] = {
       role: 'owner',
       status: 'active',
       grantedAt: now,
     };
-    multiPathUpdates[`pairing_rate_limits/${callerUid}`] = null; // Reset counter rate limit jika berhasil
+    multiPathUpdates[`pairing_rate_limits/${callerUid}`] = null; // Reset saat sukses
 
     await db.ref().update(multiPathUpdates);
 
