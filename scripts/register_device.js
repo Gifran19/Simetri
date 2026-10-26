@@ -34,7 +34,6 @@ const expiresInMinutes = parseInt(args[1], 10) || 60; // default 60 menit
 const label = args[2] || `Perangkat ${deviceId}`;
 
 // Inisialisasi Firebase Admin
-// Jika FIREBASE_DATABASE_EMULATOR_HOST tidak diatur, default ke 127.0.0.1:9000 untuk pengujian lokal
 if (!process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
   process.env.FIREBASE_DATABASE_EMULATOR_HOST = '127.0.0.1:9000';
 }
@@ -44,13 +43,13 @@ if (fs.existsSync(serviceAccountPath)) {
   const serviceAccount = require(serviceAccountPath);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
-    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-default-rtdb`
+    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-app`
   });
 } else {
   // Mode Emulator / default application credential
   admin.initializeApp({
     projectId: 'simetri-app',
-    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-default-rtdb`
+    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-app`
   });
 }
 
@@ -60,9 +59,8 @@ const db = admin.database();
  * Menghasilkan kode pairing acak kriptografis (8 karakter alfanumerik)
  */
 function generateSecurePairingCode() {
-  // Menggunakan crypto.randomBytes untuk entropi kriptografis yang kuat
   const bytes = crypto.randomBytes(4);
-  return bytes.toString('hex').toUpperCase(); // contoh: "A3F8B2C1"
+  return bytes.toString('hex').toUpperCase();
 }
 
 async function registerDeviceAndIssueCode() {
@@ -86,23 +84,40 @@ async function registerDeviceAndIssueCode() {
   try {
     const multiPathUpdates = {};
 
-    // 1. Simpan metadata perangkat
+    // 1. Periksa apakah perangkat sudah pernah didaftarkan sebelumnya
+    const metaRef = db.ref(`devices/${deviceId}/meta`);
+    const existingMetaSnap = await metaRef.get();
+    const existingMeta = existingMetaSnap.val() || {};
+
+    // 2. Jika ada kode aktif sebelumnya untuk perangkat ini, cabut kode lama
+    if (existingMeta.activePairingHash && existingMeta.activePairingHash !== sha256Hash) {
+      console.log(`Mencabut kode pairing sebelumnya: ${existingMeta.activePairingHash}`);
+      multiPathUpdates[`pairing_secrets/${existingMeta.activePairingHash}/status`] = 'revoked';
+      multiPathUpdates[`pairing_secrets/${existingMeta.activePairingHash}/revokedAt`] = now;
+      multiPathUpdates[`pairing_secrets/${existingMeta.activePairingHash}/revokedReason`] = 'superseded_by_new_code';
+    }
+
+    // 3. Simpan atau perbarui metadata perangkat
+    // PENTING: Pendaftaran ulang tidak boleh mengosongkan pemilik yang sudah ada!
     multiPathUpdates[`devices/${deviceId}/meta`] = {
       deviceId: deviceId,
       label: label,
-      registeredAt: now,
+      registeredAt: existingMeta.registeredAt || now,
       registeredBy: 'admin_local_script',
-      ownerUid: null,
-      claimedAt: null,
+      ownerUid: existingMeta.ownerUid || null, // Pertahankan pemilik yang sudah ada!
+      claimedAt: existingMeta.claimedAt || null,
+      activePairingHash: sha256Hash,
+      deviceUid: existingMeta.deviceUid || deviceId,
     };
 
-    // 2. Simpan rahasia pairing (hanya hash, BUKAN kode asli)
+    // 4. Simpan rahasia pairing baru (hanya hash, BUKAN kode asli)
     multiPathUpdates[`pairing_secrets/${sha256Hash}`] = {
       deviceId: deviceId,
       expiresAt: expiresAt,
       used: false,
       usedBy: null,
       usedAt: null,
+      status: 'available',
       createdAt: now,
     };
 
@@ -110,6 +125,9 @@ async function registerDeviceAndIssueCode() {
 
     console.log('----------------------------------------------------');
     console.log('✓ Perangkat dan kode pairing berhasil didaftarkan!');
+    if (existingMeta.ownerUid) {
+      console.log(`Info: Perangkat ini saat ini dimiliki oleh UID: ${existingMeta.ownerUid}`);
+    }
     console.log(`Berikan kode ini kepada pengguna: ${pairingCode}`);
     console.log('Kode hanya dapat digunakan SATU KALI sebelum kedaluwarsa.');
     console.log('====================================================');

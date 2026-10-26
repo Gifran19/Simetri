@@ -23,28 +23,78 @@
     "devices": {
       "$deviceId": {
         "meta": {
-          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === data.child('deviceUid').val())",
           ".write": false
         },
         "live": {
-          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
-          ".write": false
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".write": "auth != null && (auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          "voltage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "current": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "power": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "energy_kwh": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "relay_state": {
+            ".validate": "newData.isBoolean()"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber()"
+          }
         },
         "status": {
-          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
-          ".write": false
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".write": "auth != null && (auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())"
         },
         "control": {
-          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
-          ".write": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()"
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".write": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          "power": {
+            ".validate": "newData.isBoolean()"
+          },
+          "limit_va": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "tariff_per_kwh": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
         }
       }
     },
 
+    "available_years": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
     "energy_data": {
-      "$deviceId": {
-        ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
-        ".write": false
+      "$year": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "monthly_energy": {
+          "$month": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        },
+        "monthly_cost": {
+          "$month": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        },
+        "summary": {
+          "total_energy": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "total_cost": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          }
+        }
       }
     }
   }
