@@ -34,6 +34,8 @@ const expiresInMinutes = parseInt(args[1], 10) || 60; // default 60 menit
 const label = args[2] || `Perangkat ${deviceId}`;
 
 // Inisialisasi Firebase Admin
+// Namespace konsisten: simetri-app-default-rtdb
+const databaseNamespace = process.env.FIREBASE_DATABASE_NAMESPACE || 'simetri-app-default-rtdb';
 if (!process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
   process.env.FIREBASE_DATABASE_EMULATOR_HOST = '127.0.0.1:9000';
 }
@@ -43,13 +45,13 @@ if (fs.existsSync(serviceAccountPath)) {
   const serviceAccount = require(serviceAccountPath);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
-    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-app`
+    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=${databaseNamespace}`
   });
 } else {
   // Mode Emulator / default application credential
   admin.initializeApp({
     projectId: 'simetri-app',
-    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-app`
+    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=${databaseNamespace}`
   });
 }
 
@@ -60,7 +62,7 @@ const db = admin.database();
  */
 function generateSecurePairingCode() {
   const bytes = crypto.randomBytes(4);
-  return bytes.toString('hex').toUpperCase();
+  return bytes.toString('hex').toUpperCase(); // contoh: "A3F8B2C1"
 }
 
 async function registerDeviceAndIssueCode() {
@@ -68,6 +70,7 @@ async function registerDeviceAndIssueCode() {
   console.log('       SIMETRI LOCAL ADMIN - DEVICE REGISTRATION    ');
   console.log('====================================================');
   console.log(`Emulator Host      : ${process.env.FIREBASE_DATABASE_EMULATOR_HOST}`);
+  console.log(`Database Namespace : ${databaseNamespace}`);
   console.log(`Device ID          : ${deviceId}`);
   console.log(`Device Label       : ${label}`);
   console.log(`Masa Berlaku       : ${expiresInMinutes} menit`);
@@ -89,28 +92,27 @@ async function registerDeviceAndIssueCode() {
     const existingMetaSnap = await metaRef.get();
     const existingMeta = existingMetaSnap.val() || {};
 
-    // 2. Jika ada kode aktif sebelumnya untuk perangkat ini, cabut kode lama
+    // 2. Pencabutan kode sebelumnya: Jika ada kode pairing aktif sebelumnya, cabut kode lama
     if (existingMeta.activePairingHash && existingMeta.activePairingHash !== sha256Hash) {
-      console.log(`Mencabut kode pairing sebelumnya: ${existingMeta.activePairingHash}`);
+      console.log(`Mencabut kode pairing lama (Hash: ${existingMeta.activePairingHash.substring(0, 10)}...)`);
       multiPathUpdates[`pairing_secrets/${existingMeta.activePairingHash}/status`] = 'revoked';
       multiPathUpdates[`pairing_secrets/${existingMeta.activePairingHash}/revokedAt`] = now;
       multiPathUpdates[`pairing_secrets/${existingMeta.activePairingHash}/revokedReason`] = 'superseded_by_new_code';
     }
 
-    // 3. Simpan atau perbarui metadata perangkat
-    // PENTING: Pendaftaran ulang tidak boleh mengosongkan pemilik yang sudah ada!
+    // 3. Pendaftaran ulang: TIDAK MENGOSONGKAN PEMILIK YANG SUDAH ADA!
     multiPathUpdates[`devices/${deviceId}/meta`] = {
       deviceId: deviceId,
       label: label,
       registeredAt: existingMeta.registeredAt || now,
       registeredBy: 'admin_local_script',
-      ownerUid: existingMeta.ownerUid || null, // Pertahankan pemilik yang sudah ada!
+      ownerUid: existingMeta.ownerUid || null, // Pertahankan pemilik!
       claimedAt: existingMeta.claimedAt || null,
       activePairingHash: sha256Hash,
-      deviceUid: existingMeta.deviceUid || deviceId,
+      deviceUid: existingMeta.deviceUid || `esp32_${deviceId}`,
     };
 
-    // 4. Simpan rahasia pairing baru (hanya hash, BUKAN kode asli)
+    // 4. Simpan rahasia pairing baru (hanya hash, BUKAN kode plain text)
     multiPathUpdates[`pairing_secrets/${sha256Hash}`] = {
       deviceId: deviceId,
       expiresAt: expiresAt,
@@ -126,7 +128,7 @@ async function registerDeviceAndIssueCode() {
     console.log('----------------------------------------------------');
     console.log('✓ Perangkat dan kode pairing berhasil didaftarkan!');
     if (existingMeta.ownerUid) {
-      console.log(`Info: Perangkat ini saat ini dimiliki oleh UID: ${existingMeta.ownerUid}`);
+      console.log(`[PERINGATAN] Perangkat ini saat ini dimiliki oleh UID: ${existingMeta.ownerUid}`);
     }
     console.log(`Berikan kode ini kepada pengguna: ${pairingCode}`);
     console.log('Kode hanya dapat digunakan SATU KALI sebelum kedaluwarsa.');

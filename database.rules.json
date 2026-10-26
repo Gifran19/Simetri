@@ -23,12 +23,12 @@
     "devices": {
       "$deviceId": {
         "meta": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === data.child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": false
         },
         "live": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
-          ".write": "auth != null && (auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".write": "auth != null && (auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           "voltage": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
@@ -49,11 +49,11 @@
           }
         },
         "status": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
-          ".write": "auth != null && (auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())"
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".write": "auth != null && (auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())"
         },
         "control": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).exists() || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
           "power": {
             ".validate": "newData.isBoolean()"
@@ -70,31 +70,13 @@
 
     "available_years": {
       ".read": "auth != null",
-      ".write": "auth != null"
+      ".write": false
     },
 
     "energy_data": {
-      "$year": {
-        ".read": "auth != null",
-        ".write": "auth != null",
-        "monthly_energy": {
-          "$month": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          }
-        },
-        "monthly_cost": {
-          "$month": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          }
-        },
-        "summary": {
-          "total_energy": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          },
-          "total_cost": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          }
-        }
+      "$deviceIdOrYear": {
+        ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceIdOrYear).exists() || auth.uid === 'esp32_' + $deviceIdOrYear || root.child('available_years').child($deviceIdOrYear).exists())",
+        ".write": "auth != null && (auth.uid === 'esp32_' + $deviceIdOrYear || auth.uid === root.child('devices').child($deviceIdOrYear).child('meta').child('deviceUid').val())"
       }
     }
   }
