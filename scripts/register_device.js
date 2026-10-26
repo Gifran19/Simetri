@@ -1,0 +1,123 @@
+#!/usr/bin/env node
+
+/**
+ * SIMETRI Local Admin Script
+ * Mendaftarkan perangkat baru dan menerbitkan kode pairing sementara.
+ * 
+ * Penggunaan:
+ *   node scripts/register_device.js <deviceId> [expiresInMinutes] [deviceLabel]
+ * 
+ * Contoh:
+ *   node scripts/register_device.js SIMETRI_ESP32_001 60 "Kwh Meter Ruang Utama"
+ */
+
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
+
+let admin;
+try {
+  admin = require('firebase-admin');
+} catch (_) {
+  try {
+    admin = require(path.resolve(__dirname, '../backend/functions/node_modules/firebase-admin'));
+  } catch (e) {
+    console.error('Error: firebase-admin tidak ditemukan. Jalankan "npm install" di folder backend/functions terlebih dahulu.');
+    process.exit(1);
+  }
+}
+
+// Cek argumen CLI
+const args = process.argv.slice(2);
+const deviceId = args[0] || 'SIMETRI_ESP32_001';
+const expiresInMinutes = parseInt(args[1], 10) || 60; // default 60 menit
+const label = args[2] || `Perangkat ${deviceId}`;
+
+// Inisialisasi Firebase Admin
+// Jika FIREBASE_DATABASE_EMULATOR_HOST tidak diatur, default ke 127.0.0.1:9000 untuk pengujian lokal
+if (!process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
+  process.env.FIREBASE_DATABASE_EMULATOR_HOST = '127.0.0.1:9000';
+}
+
+const serviceAccountPath = path.resolve(__dirname, '../serviceAccountKey.json');
+if (fs.existsSync(serviceAccountPath)) {
+  const serviceAccount = require(serviceAccountPath);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-default-rtdb`
+  });
+} else {
+  // Mode Emulator / default application credential
+  admin.initializeApp({
+    projectId: 'simetri-app',
+    databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST}?ns=simetri-default-rtdb`
+  });
+}
+
+const db = admin.database();
+
+/**
+ * Menghasilkan kode pairing acak kriptografis (8 karakter alfanumerik)
+ */
+function generateSecurePairingCode() {
+  // Menggunakan crypto.randomBytes untuk entropi kriptografis yang kuat
+  const bytes = crypto.randomBytes(4);
+  return bytes.toString('hex').toUpperCase(); // contoh: "A3F8B2C1"
+}
+
+async function registerDeviceAndIssueCode() {
+  console.log('====================================================');
+  console.log('       SIMETRI LOCAL ADMIN - DEVICE REGISTRATION    ');
+  console.log('====================================================');
+  console.log(`Emulator Host      : ${process.env.FIREBASE_DATABASE_EMULATOR_HOST}`);
+  console.log(`Device ID          : ${deviceId}`);
+  console.log(`Device Label       : ${label}`);
+  console.log(`Masa Berlaku       : ${expiresInMinutes} menit`);
+
+  const pairingCode = generateSecurePairingCode();
+  const sha256Hash = crypto.createHash('sha256').update(pairingCode).digest('hex');
+  const now = Date.now();
+  const expiresAt = now + expiresInMinutes * 60 * 1000;
+
+  console.log(`Generated Code     : ${pairingCode} (RAHASIA SEMENTARA)`);
+  console.log(`SHA-256 Hash       : ${sha256Hash}`);
+  console.log(`Expires At         : ${new Date(expiresAt).toISOString()}`);
+
+  try {
+    const multiPathUpdates = {};
+
+    // 1. Simpan metadata perangkat
+    multiPathUpdates[`devices/${deviceId}/meta`] = {
+      deviceId: deviceId,
+      label: label,
+      registeredAt: now,
+      registeredBy: 'admin_local_script',
+      ownerUid: null,
+      claimedAt: null,
+    };
+
+    // 2. Simpan rahasia pairing (hanya hash, BUKAN kode asli)
+    multiPathUpdates[`pairing_secrets/${sha256Hash}`] = {
+      deviceId: deviceId,
+      expiresAt: expiresAt,
+      used: false,
+      usedBy: null,
+      usedAt: null,
+      createdAt: now,
+    };
+
+    await db.ref().update(multiPathUpdates);
+
+    console.log('----------------------------------------------------');
+    console.log('✓ Perangkat dan kode pairing berhasil didaftarkan!');
+    console.log(`Berikan kode ini kepada pengguna: ${pairingCode}`);
+    console.log('Kode hanya dapat digunakan SATU KALI sebelum kedaluwarsa.');
+    console.log('====================================================');
+    process.exit(0);
+  } catch (error) {
+    console.error('✗ Gagal mendaftarkan perangkat:', error);
+    process.exit(1);
+  }
+}
+
+registerDeviceAndIssueCode();

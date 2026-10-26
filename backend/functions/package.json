@@ -1,0 +1,23 @@
+{
+  "name": "simetri-backend",
+  "version": "1.0.0",
+  "description": "SIMETRI IoT Backend Cloud Functions for Secure Pairing",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "serve": "tsc -w",
+    "test": "node --test lib/__tests__/*.test.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.3.3"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  }
+}

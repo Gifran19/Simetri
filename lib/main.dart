@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 import 'screens/welcome_screen.dart';
+import 'services/auth_service.dart';
 import 'services/device_service.dart';
 import 'services/sensor_stream_service.dart';
 
@@ -16,8 +17,10 @@ void main() async {
   if (DefaultFirebaseOptions.isConfigured) {
     try {
       await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+      // Pulihkan atau buat sesi anonim otomatis tanpa formulir login
+      await AuthService.instance.ensureAnonymousSession();
     } catch (e) {
-      debugPrint('Firebase init error: $e');
+      debugPrint('Firebase init / auth error: $e');
     }
   }
 

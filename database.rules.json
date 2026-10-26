@@ -1,37 +1,50 @@
 {
   "rules": {
-    "available_years": {
-      ".read": "auth != null || true",
-      ".write": "auth != null"
+    ".read": false,
+    ".write": false,
+
+    "permissions": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
     },
-    "energy_data": {
-      "$year": {
-        ".read": "auth != null || true",
-        ".write": "auth != null",
-        "monthly_energy": {
-          "$month": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          }
+
+    "pairing_secrets": {
+      ".read": false,
+      ".write": false
+    },
+
+    "pairing_rate_limits": {
+      ".read": false,
+      ".write": false
+    },
+
+    "devices": {
+      "$deviceId": {
+        "meta": {
+          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          ".write": false
         },
-        "monthly_cost": {
-          "$month": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          }
+        "live": {
+          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          ".write": false
         },
-        "summary": {
-          "total_energy": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          },
-          "total_cost": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
-          }
+        "status": {
+          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          ".write": false
+        },
+        "control": {
+          ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+          ".write": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()"
         }
       }
     },
-    "devices": {
+
+    "energy_data": {
       "$deviceId": {
-        ".read": "auth != null || true",
-        ".write": "auth != null || true"
+        ".read": "auth != null && root.child('permissions').child(auth.uid).child($deviceId).exists()",
+        ".write": false
       }
     }
   }

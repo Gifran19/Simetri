@@ -1,15 +1,16 @@
 // File: lib/widgets/connect_device_sheet.dart
 
-import 'dart:async';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 
 import '../models/device_data.dart';
 import '../services/device_service.dart';
-import '../services/security_service.dart';
+import '../services/pairing_service.dart';
 import '../services/sensor_stream_service.dart';
 
 /// Modal Bottom Sheet untuk menghubungkan/pairing aplikasi SIMETRI ke perangkat ESP32
-/// melalui Kode Perangkat / Device ID unik tanpa memerlukan akun login.
+/// menggunakan kode pairing sementara dari backend Cloud Functions.
+/// Tidak memerlukan form login atau registrasi akun manual.
 class ConnectDeviceSheet extends StatefulWidget {
   final Function(DeviceData connectedDevice) onConnected;
 
@@ -22,14 +23,15 @@ class ConnectDeviceSheet extends StatefulWidget {
 class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  final TextEditingController _deviceCodeController = TextEditingController();
+  final TextEditingController _pairingCodeController = TextEditingController();
 
-  // Step state: 0 = input pairing code, 1 = connecting, 2 = success
+  // State: 0 = input kode pairing, 1 = memverifikasi ke backend, 2 = sukses
   int _state = 0;
-  String _statusMessage = 'Menghubungkan ke ESP32...';
+  String _statusMessage = 'Memverifikasi kode pairing...';
+  String? _errorMessage;
   DeviceData? _connectedDeviceData;
-
-  Timer? _connectTimer;
+  String _claimedDeviceId = '';
+  bool _isEspOnline = false;
 
   @override
   void initState() {
@@ -38,15 +40,12 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
-
-    _deviceCodeController.text = DeviceService.deviceIdNotifier.value;
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
-    _deviceCodeController.dispose();
-    _connectTimer?.cancel();
+    _pairingCodeController.dispose();
     super.dispose();
   }
 
@@ -57,60 +56,99 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
     Navigator.pop(context);
   }
 
-  Future<void> _startConnection() async {
-    final code = _deviceCodeController.text.trim();
+  Future<void> _startPairing() async {
+    final code = _pairingCodeController.text.trim().toUpperCase();
     if (code.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Color(0xff1A1423),
-          content: Text('Kode perangkat tidak boleh kosong!'),
-        ),
-      );
+      setState(() {
+        _errorMessage = 'Kode pairing wajib diisi.';
+      });
       return;
     }
 
-    // Simpan Device ID aktif & set target di stream service
-    await DeviceService.savePairedDeviceId(code);
-    SensorStreamService.instance.setActiveDeviceId(code);
-
     setState(() {
       _state = 1;
-      _statusMessage = 'Menghubungkan ke perangkat ($code)...';
+      _errorMessage = null;
+      _statusMessage = 'Memverifikasi kode pairing ke server...';
     });
 
-    _connectTimer = Timer(const Duration(milliseconds: 800), () {
+    try {
+      // 1. Panggil backend Cloud Function secara aman
+      final result = await PairingService.instance.claimDevice(code);
+
       if (!mounted) return;
       setState(() {
-        _statusMessage = 'Membaca telemetri sensor PZEM-004T di node devices/$code...';
+        _statusMessage = 'Kode valid. Mengonfigurasi hak akses perangkat...';
       });
 
-      _connectTimer = Timer(const Duration(milliseconds: 900), () async {
-        if (!mounted) return;
+      final deviceId = result.deviceId;
+      _claimedDeviceId = deviceId;
 
-        // Ambil data live dari service dan generate hardware security token
-        final secureToken = await SecurityService.getOrGenerateDeviceToken();
-        await SecurityService.logSecurityEvent(
-          'Pairing IoT',
-          'Smart Meter ESP32 ($code) terhubung (Hardware Token: $secureToken)',
-        );
-        final deviceData = await DeviceService().connectDevice();
-        _connectedDeviceData = deviceData;
+      // 2. Simpan Device ID publik (BUKAN kode pairing) ke local storage
+      await DeviceService.savePairedDeviceId(deviceId);
+      SensorStreamService.instance.setActiveDeviceId(deviceId);
 
-        // Kirim callback status terhubung
-        widget.onConnected(deviceData);
-
-        if (!mounted) return;
-        setState(() {
-          _statusMessage = 'Sinkronisasi data energi ESP32 berhasil!';
-          _state = 2;
-        });
-
-        _connectTimer = Timer(const Duration(milliseconds: 900), () {
-          if (!mounted) return;
-          Navigator.pop(context);
-        });
+      // 3. Periksa status fisik ESP32 aktual di database
+      setState(() {
+        _statusMessage = 'Memeriksa status online perangkat ($deviceId)...';
       });
-    });
+
+      bool espOnline = false;
+      try {
+        final statusSnapshot = await FirebaseDatabase.instance
+            .ref('devices/$deviceId/status')
+            .get();
+        if (statusSnapshot.exists) {
+          final val = statusSnapshot.value;
+          if (val is Map && val['online'] == true) {
+            espOnline = true;
+          }
+        }
+
+        // Cek juga timestamp telemetri terakhir jika ada
+        if (!espOnline) {
+          final liveSnapshot = await FirebaseDatabase.instance
+              .ref('devices/$deviceId/live/timestamp')
+              .get();
+          if (liveSnapshot.exists) {
+            final lastTs = liveSnapshot.value as int? ?? 0;
+            // Jika data diterima dalam 45 detik terakhir, perangkat dianggap online
+            if (DateTime.now().millisecondsSinceEpoch - lastTs < 45000) {
+              espOnline = true;
+            }
+          }
+        }
+      } catch (dbErr) {
+        debugPrint('ConnectDeviceSheet check status warning: $dbErr');
+      }
+
+      _isEspOnline = espOnline;
+
+      // 4. Update status koneksi & ambil snapshot model data
+      await DeviceService.saveConnectionState(true);
+      final deviceData = await DeviceService().connectDevice();
+      _connectedDeviceData = deviceData;
+
+      if (!mounted) return;
+      setState(() {
+        _state = 2;
+        _statusMessage = result.message;
+      });
+
+      // Panggil callback
+      widget.onConnected(deviceData);
+    } on PairingException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _state = 0;
+        _errorMessage = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _state = 0;
+        _errorMessage = 'Terjadi kesalahan sistem: $e';
+      });
+    }
   }
 
   @override
@@ -155,7 +193,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Icon(
-                            Icons.sensors_rounded,
+                            Icons.security_rounded,
                             color: Color(0xff00D9A6),
                             size: 20,
                           ),
@@ -166,7 +204,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Pairing Smart Meter ESP32',
+                                'Pairing Perangkat SIMETRI',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -175,7 +213,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                               ),
                               SizedBox(height: 2),
                               Text(
-                                'Hubungkan ponsel & perangkat via Firebase',
+                                'Verifikasi kode pairing aman via backend',
                                 style: TextStyle(color: Colors.white54, fontSize: 11),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -196,7 +234,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
 
               // Dynamic content based on _state
               if (_state == 0) _buildPairingInputView(),
-              if (_state == 1) _buildConnectingView(),
+              if (_state == 1) _buildVerifyingView(),
               if (_state == 2) _buildSuccessView(),
             ],
           ),
@@ -206,13 +244,13 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
   }
 
   // ----------------------------------------------------
-  // VIEW: Input Kode Pairing Perangkat ESP32
+  // VIEW: Input Kode Pairing Sementara
   // ----------------------------------------------------
   Widget _buildPairingInputView() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Edukasi lintas internet
+        // Edukasi keamanan kode pairing
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -223,11 +261,11 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           child: const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.wifi_tethering_rounded, color: Color(0xff00D9A6), size: 18),
+              Icon(Icons.vpn_key_rounded, color: Color(0xff00D9A6), size: 18),
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'ESP32 dan ponsel Anda dapat menggunakan jaringan internet berbeda. Cukup masukkan ID/Kode perangkat yang ingin dipantau.',
+                  'Masukkan kode pairing sementara yang diterbitkan oleh administrator. Kode ini rahasia, sekali pakai, dan terenkripsi.',
                   style: TextStyle(color: Color(0xffB8C2D1), fontSize: 11, height: 1.4),
                 ),
               ),
@@ -236,9 +274,34 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
         ),
         const SizedBox(height: 16),
 
-        // Input Kode Perangkat
+        // Pesan Error jika ada
+        if (_errorMessage != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.redAccent.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _errorMessage!,
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+
+        // Input Kode Pairing
         const Text(
-          'Kode / ID Perangkat ESP32:',
+          'Kode Pairing Sementara:',
           style: TextStyle(
             color: Colors.white70,
             fontSize: 12,
@@ -251,79 +314,57 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           decoration: BoxDecoration(
             color: const Color(0xff10233F),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white12),
+            border: Border.all(
+              color: _errorMessage != null ? Colors.redAccent.withValues(alpha: 0.5) : Colors.white12,
+            ),
           ),
           child: Row(
             children: [
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 14),
-                child: Icon(Icons.tag_rounded, color: Color(0xff00D9A6), size: 20),
+                child: Icon(Icons.password_rounded, color: Color(0xff00D9A6), size: 20),
               ),
               Expanded(
                 child: TextField(
-                  controller: _deviceCodeController,
+                  controller: _pairingCodeController,
+                  textCapitalization: TextCapitalization.characters,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 15,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
+                    letterSpacing: 2.0,
                   ),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
-                    hintText: 'Misal: simetri_01',
-                    hintStyle: TextStyle(color: Colors.white30, fontSize: 13),
+                    hintText: 'Misal: A3F8B2C1',
+                    hintStyle: TextStyle(color: Colors.white30, fontSize: 13, letterSpacing: 0),
                   ),
                 ),
               ),
-              if (_deviceCodeController.text.isNotEmpty)
+              if (_pairingCodeController.text.isNotEmpty)
                 IconButton(
                   icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 18),
                   onPressed: () {
-                    setState(() => _deviceCodeController.clear());
+                    setState(() {
+                      _pairingCodeController.clear();
+                      _errorMessage = null;
+                    });
                   },
                 ),
             ],
           ),
         ),
-        const SizedBox(height: 8),
-
-        // Hint pilihan cepat
-        Row(
-          children: [
-            const Text(
-              'Rekomendasi ID: ',
-              style: TextStyle(color: Colors.white38, fontSize: 11),
-            ),
-            GestureDetector(
-              onTap: () {
-                setState(() => _deviceCodeController.text = 'simetri_01');
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xff00D9A6).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'simetri_01',
-                  style: TextStyle(color: Color(0xff00D9A6), fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ),
-          ],
-        ),
-
         const SizedBox(height: 20),
 
-        // Tombol Pairing / Hubungkan
+        // Tombol Verifikasi & Hubungkan
         SizedBox(
           width: double.infinity,
           height: 48,
           child: ElevatedButton.icon(
-            onPressed: _startConnection,
-            icon: const Icon(Icons.link_rounded, size: 20),
+            onPressed: _startPairing,
+            icon: const Icon(Icons.check_circle_outline_rounded, size: 20),
             label: const Text(
-              'Hubungkan Perangkat Ini',
+              'Verifikasi & Hubungkan',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
@@ -339,9 +380,9 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
   }
 
   // ----------------------------------------------------
-  // VIEW: Proses Sinkronisasi / Connecting
+  // VIEW: Memverifikasi ke Cloud Functions
   // ----------------------------------------------------
-  Widget _buildConnectingView() {
+  Widget _buildVerifyingView() {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -361,7 +402,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           ),
           const SizedBox(height: 18),
           const Text(
-            'Menghubungkan ke ESP32...',
+            'Memproses Otorisasi Backend...',
             style: TextStyle(
               color: Colors.white,
               fontSize: 15,
@@ -380,12 +421,12 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
   }
 
   // ----------------------------------------------------
-  // VIEW: Sukses Terhubung
+  // VIEW: Sukses Pairing
   // ----------------------------------------------------
   Widget _buildSuccessView() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
       decoration: BoxDecoration(
         color: const Color(0xff10233F),
         borderRadius: BorderRadius.circular(16),
@@ -394,8 +435,8 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
       child: Column(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 44,
+            height: 44,
             decoration: const BoxDecoration(
               color: Color(0xff00D9A6),
               shape: BoxShape.circle,
@@ -403,23 +444,81 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
             child: const Icon(
               Icons.check_rounded,
               color: Color(0xff071426),
-              size: 30,
+              size: 28,
             ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            'Perangkat ${_deviceCodeController.text} Terhubung!',
-            style: const TextStyle(
+          const SizedBox(height: 14),
+          const Text(
+            'Pairing Berhasil!',
+            style: TextStyle(
               color: Colors.white,
               fontSize: 16,
               fontWeight: FontWeight.bold,
             ),
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'Aliran data sensor PZEM-004T telah aktif dari Firebase.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white70, fontSize: 12),
+          const SizedBox(height: 4),
+          Text(
+            'Device ID: $_claimedDeviceId',
+            style: const TextStyle(
+              color: Color(0xff00D9A6),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Pembeda status: Pairing berhasil vs Status ESP32 Online
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _isEspOnline
+                  ? const Color(0xff00D9A6).withValues(alpha: 0.15)
+                  : Colors.amber.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _isEspOnline
+                    ? const Color(0xff00D9A6).withValues(alpha: 0.4)
+                    : Colors.amber.withValues(alpha: 0.4),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _isEspOnline ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+                  color: _isEspOnline ? const Color(0xff00D9A6) : Colors.amber,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _isEspOnline
+                        ? 'ESP32 Online & mengirim data telemetri.'
+                        : 'ESP32 belum aktif/offline. Data akan otomatis masuk saat alat dinyalakan.',
+                    style: TextStyle(
+                      color: _isEspOnline ? const Color(0xff00D9A6) : Colors.amber,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Tombol Selesai
+          SizedBox(
+            width: double.infinity,
+            height: 40,
+            child: ElevatedButton(
+              onPressed: _handleClose,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xff00D9A6),
+                foregroundColor: const Color(0xff071426),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Buka Dasbor', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
           ),
         ],
       ),

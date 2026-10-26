@@ -52,8 +52,52 @@ class AuthService {
   /// Pengguna yang sedang login saat ini
   User? get currentUser => _auth?.currentUser;
 
-  /// Apakah pengguna sudah login
+  /// UID pengguna aktif saat ini
+  String? get currentUid => currentUser?.uid;
+
+  /// Apakah pengguna sudah memiliki sesi login aktif
   bool get isLoggedIn => currentUser != null;
+
+  // ----------------------------------------------------
+  // SESI ANONIM OTOMATIS (PERSISTEN)
+  // ----------------------------------------------------
+  /// Memastikan sesi pengguna aktif tanpa memaksa pendaftaran/login akun manual.
+  /// - Jika sudah ada sesi aktif sebelumnya, sesi tersebut dipulihkan (UID TIDAK BERUBAH).
+  /// - Jika belum ada sesi, melakukan signInAnonymously() secara otomatis.
+  /// - Kegagalan koneksi/Firebase akan dilempar sebagai exception, tidak memberikan status sukses palsu.
+  Future<User?> ensureAnonymousSession() async {
+    final auth = _auth;
+    if (auth == null) {
+      throw const AuthException(
+        'Layanan Firebase belum terhubung. Periksa konfigurasi proyek Firebase.',
+      );
+    }
+
+    // 1. Cek sesi lokal yang sudah tersimpan
+    final existingUser = auth.currentUser;
+    if (existingUser != null) {
+      debugPrint('AuthService: Memulihkan sesi pengguna yang sudah ada (UID: ${existingUser.uid})');
+      return existingUser;
+    }
+
+    // 2. Jika belum ada sesi, buat sesi anonim baru
+    try {
+      debugPrint('AuthService: Memulai signInAnonymously() baru...');
+      final credential = await auth.signInAnonymously();
+      final newUser = credential.user;
+      if (newUser == null) {
+        throw const AuthException('Gagal mendapatkan identitas anonim dari Firebase.');
+      }
+      debugPrint('AuthService: Sesi anonim berhasil dibuat (UID: ${newUser.uid})');
+      return newUser;
+    } on FirebaseAuthException catch (e) {
+      debugPrint('AuthService.signInAnonymously error: ${e.code} - ${e.message}');
+      throw AuthException(getReadableErrorMessage(e.code));
+    } catch (e) {
+      debugPrint('AuthService.signInAnonymously unknown error: $e');
+      throw const AuthException('Gagal membuat sesi autentikasi otomatis. Periksa jaringan Anda.');
+    }
+  }
 
   // ----------------------------------------------------
   // MASUK (LOGIN)

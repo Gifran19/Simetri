@@ -62,8 +62,11 @@ ios/Runner/GoogleService-Info.plist
 !.env.example
 
 # Node.js (firebase-admin backend / tools)
-node_modules/
+**/node_modules/
 package-lock.json
+**/package-lock.json
+backend/functions/lib/
+serviceAccountKey*.json
 
 # Simetri_Review – folder review lokal, bukan bagian source code
 Simetri_Review/
