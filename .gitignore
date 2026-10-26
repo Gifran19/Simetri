@@ -75,3 +75,9 @@ Simetri_Review/
 # BACKUP FIRMWARE – tidak di-track di repo utama
 # ============================================================
 firmware_iot/*_backup/
+
+# ============================================================
+# FIRMWARE ESP32 – file secrets lokal (berisi kredensial nyata)
+# ============================================================
+firmware_iot/**/secrets.h
+

@@ -457,4 +457,86 @@ describe('SIMETRI Production-Grade Pairing & Security Verification Suite', () =>
     const metaSnap = await db.ref(`devices/${sameUserDevice}/meta`).get();
     assert.strictEqual(metaSnap.val().ownerUid, sameUserUid);
   });
+
+  // =========================================================================
+  // 6. PENGUJIAN TAMBAHAN KONSISTENSI (PARALEL + VERIFIKASI PERMISSION AKTIF)
+  // =========================================================================
+
+  it('9. Recovery setelah kegagalan operasi pertama (secret used, permissions belum tersimpan) berhasil dan permission aktif terkonfirmasi', async () => {
+    const parallelUid = 'user_parallel_fail_recovery';
+    const parallelDevice = 'DEV_PARALLEL_FAIL_01';
+    const parallelCode = 'PARALLEL_FAIL_CD';
+
+    // Simulasikan operasi pertama yang "gagal di tengah jalan":
+    // secret sudah ditandai 'used' oleh parallelUid, tetapi permissions belum tersimpan.
+    const hash = crypto.createHash('sha256').update(parallelCode.trim().toUpperCase()).digest('hex');
+    const now = Date.now();
+    await db.ref(`pairing_secrets/${hash}`).set({
+      deviceId: parallelDevice,
+      expiresAt: now + 60000,
+      used: true,
+      usedBy: parallelUid,
+      usedAt: now - 500,
+      status: 'used',
+      createdAt: now - 600,
+    });
+    // Device meta sudah dikunci oleh operasi pertama, tapi permissions belum ada
+    await db.ref(`devices/${parallelDevice}/meta`).set({
+      deviceId: parallelDevice,
+      ownerUid: parallelUid,
+      claimOpId: 'op_failed_first_attempt',
+      claimedAt: now - 500,
+    });
+    // Sengaja TIDAK menulis permissions -> simulasi crash setelah secret ditandai
+
+    // Permintaan recovery dari UID yang sama harus memulihkan permission
+    const recoveryReq = { auth: { uid: parallelUid }, data: { pairingCode: parallelCode } } as any;
+    const result = await handleClaimDevice(recoveryReq, db);
+
+    assert.strictEqual(result.success, true, 'Recovery harus berhasil');
+    assert.strictEqual(result.deviceId, parallelDevice);
+
+    // Verifikasi permission aktif benar-benar tersimpan
+    const permSnap = await db.ref(`permissions/${parallelUid}/${parallelDevice}`).get();
+    assert.ok(permSnap.exists(), 'Permission harus ada setelah recovery');
+    assert.strictEqual(permSnap.val().status, 'active', 'Status permission harus active');
+    assert.strictEqual(permSnap.val().role, 'owner', 'Role harus owner');
+
+    // Verifikasi kepemilikan perangkat tetap terjaga
+    const metaAfter = await db.ref(`devices/${parallelDevice}/meta`).get();
+    assert.strictEqual(metaAfter.val().ownerUid, parallelUid, 'ownerUid harus tetap parallelUid');
+  });
+
+  it('10. Verifikasi permission.status === "active" dikonfirmasi setelah klaim sukses normal; kode revoked tidak bisa masuk lagi', async () => {
+    const verifyUid = 'user_verify_active_perm';
+    const verifyDevice = 'DEV_VERIFY_ACTIVE_01';
+    const verifyCode = 'VERIFYACTIVECODE';
+
+    await createSecret(verifyCode, verifyDevice, 60 * 1000);
+
+    const req = { auth: { uid: verifyUid }, data: { pairingCode: verifyCode } } as any;
+    const result = await handleClaimDevice(req, db);
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.deviceId, verifyDevice);
+
+    // Verifikasi langsung di database bahwa permission aktif tersimpan
+    const permSnap = await db.ref(`permissions/${verifyUid}/${verifyDevice}`).get();
+    assert.ok(permSnap.exists(), 'Permission harus ada di database setelah klaim');
+    assert.strictEqual(permSnap.val().status, 'active', 'status harus "active"');
+    assert.strictEqual(permSnap.val().role, 'owner');
+
+    // Revoke permission, lalu pastikan retry ditolak (izin sudah dicabut)
+    await db.ref(`permissions/${verifyUid}/${verifyDevice}/status`).set('revoked');
+
+    await assert.rejects(
+      async () => handleClaimDevice(req, db),
+      (err: any) => {
+        assert.ok(err instanceof HttpsError);
+        assert.strictEqual(err.code, 'failed-precondition');
+        assert.match(err.message, /dicabut/);
+        return true;
+      }
+    );
+  });
 });

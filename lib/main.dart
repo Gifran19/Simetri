@@ -3,6 +3,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
+import 'config/emulator_config.dart';
 import 'firebase_options.dart';
 import 'screens/splash_screen.dart';
 import 'screens/welcome_screen.dart';
@@ -17,6 +18,12 @@ void main() async {
   if (DefaultFirebaseOptions.isConfigured) {
     try {
       await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+      // Konfigurasi emulator SEBELUM autentikasi dan listener dimulai.
+      // Aktifkan dengan: flutter run --dart-define=USE_FIREBASE_EMULATOR=true
+      // Jika tidak ada flag tersebut, fungsi ini tidak melakukan apa-apa.
+      await configureEmulatorIfNeeded();
+
       // Pulihkan atau buat sesi anonim otomatis tanpa formulir login
       await AuthService.instance.ensureAnonymousSession();
     } catch (e) {

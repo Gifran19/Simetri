@@ -176,6 +176,15 @@ export async function handleClaimDevice(
       await db.ref().update(recoveryUpdates);
     }
 
+    // 6d. VERIFIKASI: Konfirmasi permission aktif benar-benar tersedia sebelum laporkan sukses.
+    const verifyRecoverySnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
+    if (!verifyRecoverySnap.exists() || verifyRecoverySnap.val()?.status !== 'active') {
+      throw new HttpsError(
+        'internal',
+        'Pemulihan gagal: izin akses tidak dapat dikonfirmasi. Silakan coba lagi.'
+      );
+    }
+
     return {
       success: true,
       deviceId,
@@ -276,7 +285,15 @@ export async function handleClaimDevice(
       const currentSecretVal = txSecretResult.snapshot.val() as PairingSecretData | null;
       if (currentSecretVal && currentSecretVal.usedBy === callerUid) {
         // Permintaan paralel dari UID yang sama baru saja menyelesaikan klaim dengan sukses.
-        // Kembalikan respons sukses yang konsisten tanpa rollback.
+        // VERIFIKASI: Konfirmasi permission aktif benar-benar tersedia sebelum laporkan sukses.
+        const verifyParallelSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
+        if (!verifyParallelSnap.exists() || verifyParallelSnap.val()?.status !== 'active') {
+          // Operasi paralel belum selesai menyimpan permission — tunggu atau laporkan gagal.
+          throw new HttpsError(
+            'aborted',
+            'Klaim sedang dalam proses. Izin akses belum siap. Silakan coba lagi.'
+          );
+        }
         return {
           success: true,
           deviceId,
@@ -336,6 +353,16 @@ export async function handleClaimDevice(
     multiPathUpdates[`pairing_rate_limits/${callerUid}`] = null; // Reset saat sukses
 
     await db.ref().update(multiPathUpdates);
+
+    // 10. VERIFIKASI FINAL: Konfirmasi permission aktif benar-benar tersimpan sebelum laporkan sukses.
+    // Mencegah kondisi di mana update() selesai tetapi data belum dapat dibaca.
+    const verifyPermSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
+    if (!verifyPermSnap.exists() || verifyPermSnap.val()?.status !== 'active') {
+      throw new HttpsError(
+        'internal',
+        'Gagal mengonfirmasi izin akses ke perangkat. Silakan coba lagi.'
+      );
+    }
 
     return {
       success: true,
