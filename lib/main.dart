@@ -14,20 +14,24 @@ import 'services/sensor_stream_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Inisialisasi Firebase HANYA jika kredensial asli sudah diisi
-  if (DefaultFirebaseOptions.isConfigured) {
+  // Inisialisasi Firebase:
+  // 1. Jika mode emulator aktif (--dart-define=USE_FIREBASE_EMULATOR=true),
+  //    gunakan EmulatorConfig.emulatorFirebaseOptions secara eksplisit.
+  // 2. Jika mode cloud, gunakan DefaultFirebaseOptions.currentPlatform jika sudah dikonfigurasi.
+  if (isEmulatorMode) {
     try {
-      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-      // Konfigurasi emulator SEBELUM autentikasi dan listener dimulai.
-      // Aktifkan dengan: flutter run --dart-define=USE_FIREBASE_EMULATOR=true
-      // Jika tidak ada flag tersebut, fungsi ini tidak melakukan apa-apa.
+      await Firebase.initializeApp(options: EmulatorConfig.emulatorFirebaseOptions);
       await configureEmulatorIfNeeded();
-
-      // Pulihkan atau buat sesi anonim otomatis tanpa formulir login
       await AuthService.instance.ensureAnonymousSession();
     } catch (e) {
-      debugPrint('Firebase init / auth error: $e');
+      debugPrint('Firebase emulator init error: $e');
+    }
+  } else if (DefaultFirebaseOptions.isConfigured) {
+    try {
+      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+      await AuthService.instance.ensureAnonymousSession();
+    } catch (e) {
+      debugPrint('Firebase cloud init / auth error: $e');
     }
   }
 
@@ -35,7 +39,7 @@ void main() async {
   final pairedId = await DeviceService.getPairedDeviceId();
   SensorStreamService.instance.setActiveDeviceId(pairedId);
 
-  // Periksa apakah pengguna baru pertama kali membuka aplikasi
+  // Periksa status onboarding
   final hasOnboarded = await DeviceService.hasOnboarded();
 
   runApp(SimentriApp(initialOnboarded: hasOnboarded));

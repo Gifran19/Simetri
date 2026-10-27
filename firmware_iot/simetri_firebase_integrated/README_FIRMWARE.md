@@ -2,163 +2,127 @@
 
 ## Deskripsi
 
-Firmware ESP32 pengganti firmware Blynk, menggunakan Firebase Realtime Database (RTDB)
-sebagai backend. Hardware identik dengan firmware Blynk asli.
+Firmware ESP32 pengganti firmware Blynk lama, menggunakan Firebase Realtime Database (RTDB) dan Firebase Authentication REST API. Hardware dan pinout identik dengan firmware asli.
 
 ---
 
-## Hardware
+## Hardware Pinout
 
-| Komponen        | GPIO / Konfigurasi                   |
-|-----------------|--------------------------------------|
-| PZEM-004T V4    | RX=16, TX=17, HardwareSerial 2       |
-| LCD 20x2 I2C    | SDA=21, SCL=22, alamat 0x27          |
-| Tombol Kondisi  | GPIO 25 (INPUT_PULLUP)               |
-| Tombol Hari     | GPIO 26 (INPUT_PULLUP)               |
-| Tombol Bulan    | GPIO 27 (INPUT_PULLUP)               |
-| Buzzer          | GPIO 19                              |
-| Relay           | GPIO 14, active LOW                  |
+| Komponen        | GPIO / Konfigurasi                   | Catatan                        |
+|-----------------|--------------------------------------|--------------------------------|
+| PZEM-004T V4    | RX=GPIO 16, TX=GPIO 17               | HardwareSerial 2               |
+| LCD 20x2 I2C    | SDA=GPIO 21, SCL=GPIO 22             | Alamat I2C 0x27                |
+| Tombol Kondisi  | GPIO 25 (INPUT_PULLUP)               | Halaman V, I, P                |
+| Tombol Hari     | GPIO 26 (INPUT_PULLUP)               | Halaman kWh & Biaya Hari Ini   |
+| Tombol Bulan    | GPIO 27 (INPUT_PULLUP)               | Halaman kWh & Biaya Bulan Ini  |
+| Buzzer          | GPIO 19                              | Feedback nada tombol           |
+| Relay           | GPIO 14 (Active LOW)                 | Safety guard staging diaktifkan|
 
 ---
 
-## Library yang Diperlukan
+## Status Pengujian & Kompilasi (Laporan Terpisah)
 
-Instal via Arduino Library Manager:
+| Aspek                | Status          | Detail / Keterangan |
+|----------------------|-----------------|---------------------|
+| **Kompilasi Compiler** | **Belum Dikompilasi** | Toolchain compiler (`arduino-cli` / `platformio`) belum terpasang di environment sistem pengembang. Validasi dilakukan melalui semantic/syntax review dan mock unit tests. |
+| **Pengujian Emulator** | **Lulus Unit Test**   | Pengujian logic cloud functions, token claim, dan emulator integration rules berjalan via test suite backend (`npm test`). |
+| **Pengujian Hardware** | **Menunggu Flashing** | Belum di-flash ke modul fisik ESP32. Flashing dilakukan setelah verifikasi environment selesai. |
 
-| Library                    | Versi       | Catatan                     |
-|----------------------------|-------------|-----------------------------|
-| PZEM-004T v3.0 (olekmali)  | >= 1.1.2    | Untuk komunikasi PZEM       |
-| LiquidCrystal_I2C          | >= 1.1.2    | Untuk LCD I2C               |
-| ArduinoJson (Blanchon)     | >= 6.21.0   | Untuk parse JSON Firebase   |
-| HTTPClient                 | Bawaan      | ESP32 Arduino Core >= 2.0.0 |
-| WiFiClientSecure           | Bawaan      | ESP32 Arduino Core >= 2.0.0 |
+---
 
-**Board Manager**: `esp32 by Espressif Systems` versi >= 2.0.14
+## Mode Operasi: Emulator vs Cloud
+
+Mode ditentukan secara eksplisit melalui konstanta `#define USE_FIREBASE_EMULATOR` di `secrets.h`.
+
+### 1. Mode Emulator (`USE_FIREBASE_EMULATOR true`)
+- **Protokol**: HTTP biasa (port 9099 untuk Auth, port 9000 untuk RTDB).
+- **Endpoint Auth**: `http://<EMULATOR_HOST>:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-key`
+- **Endpoint Refresh**: `http://<EMULATOR_HOST>:9099/securetoken.googleapis.com/v1/token?key=fake-key`
+- **Endpoint RTDB**: `http://<EMULATOR_HOST>:9000/devices/<DEVICE_ID>/live.json?ns=<NAMESPACE>&auth=<TOKEN>`
+- **Keamanan**: Kredensial emulator **TIDAK AKAN PERNAH** dikirimkan ke endpoint produksi Google.
+
+### 2. Mode Cloud Production (`USE_FIREBASE_EMULATOR false`)
+- **Protokol**: HTTPS murni dengan verifikasi sertifikat Root CA (Google Trust Services GTS Root R1).
+- **Keamanan**: **Dilarang memakai `setInsecure()`**. Verifikasi sertifikat TLS aktif penuh (`root_ca.h`).
+
+---
+
+## Panduan IP Host & Jaringan
+
+ESP32 adalah mikrokontroler mandiri di jaringan Wi-Fi, sehingga **tidak dapat menggunakan `127.0.0.1` atau `localhost`**.
+
+| Perangkat Klien | Host Emulator yang Digunakan | Keterangan |
+|-----------------|------------------------------|------------|
+| **ESP32 Fisik** | IP LAN Komputer (misal: `192.168.1.50`) | Komputer dan ESP32 harus berada di jaringan Wi-Fi lokal yang sama. Port 9000 & 9099 harus diizinkan pada Firewall komputer. |
+| **Ponsel Fisik (Flutter)** | IP LAN Komputer (misal: `192.168.1.50`) | Sama seperti ESP32 fisik. |
+| **Android Emulator (AVD)** | `10.0.2.2` | Alias bawaan Android Emulator untuk host loopback komputer. |
+| **iOS Simulator** | `127.0.0.1` | Berbagi jaringan network stack yang sama dengan macOS host. |
 
 ---
 
 ## Setup Kredensial
 
-1. Salin file template:
-   ```
-   cp secrets.example.h secrets.h
-   ```
-
-2. Isi nilai di `secrets.h`:
-   ```cpp
-   #define WIFI_SSID        "nama_wifi_anda"
-   #define WIFI_PASSWORD    "password_wifi"
-   #define DEVICE_ID        "SIMETRI_ESP32_001"
-   #define FIREBASE_HOST    "<project>.asia-southeast1.firebasedatabase.app"
-   #define FIREBASE_PROJECT_ID  "<project-id>"
-   #define FIREBASE_API_KEY "Web_API_Key_dari_Firebase_Console"
-   #define DEVICE_EMAIL     "device_simetri_esp32_001@simetri.internal"
-   #define DEVICE_PASSWORD  "<password dari output register_device.js>"
-   ```
-
-3. Kredensial `DEVICE_EMAIL` dan `DEVICE_PASSWORD` diperoleh dengan menjalankan:
+1. Salin template:
    ```bash
-   # Mode emulator (untuk pengujian lokal)
+   cp firmware_iot/simetri_firebase_integrated/secrets.example.h firmware_iot/simetri_firebase_integrated/secrets.h
+   ```
+
+2. Daftarkan perangkat untuk mendapatkan akun auth khusus ESP32:
+   ```bash
+   # Mode emulator:
    node scripts/register_device.js --mode=emulator SIMETRI_ESP32_001 60 "Kwh Meter Utama"
 
-   # Mode production (untuk deployment nyata)
+   # Mode production:
    node scripts/register_device.js --mode=production SIMETRI_ESP32_001 60 "Kwh Meter Utama"
    ```
-   Password ditampilkan **satu kali** saat akun baru dibuat. Simpan dengan aman!
+   *Salin email dan password dari output skrip tersebut ke `secrets.h`.*
 
 ---
 
-## Pengujian dengan Firebase Emulator
+## Keamanan Relay (`ENABLE_RELAY_CONTROL`)
 
-> Pastikan Firebase Emulator Suite sudah berjalan sebelum mengunggah firmware.
+Nilai default adalah `false` (Staging Guard).
 
-1. Jalankan emulator di komputer pengembang:
-   ```bash
-   cd backend
-   firebase emulators:start
-   ```
-
-2. Temukan IP komputer pengembang di jaringan WiFi yang sama dengan ESP32:
-   ```bash
-   # Windows: ipconfig
-   # Linux/Mac: ifconfig
-   ```
-
-3. Edit `secrets.h` untuk mode emulator:
-   ```cpp
-   #define FIREBASE_HOST    "192.168.x.x:9000"   // IP komputer:port emulator DB
-   #define FIREBASE_API_KEY "fake-emulator-key"
-   ```
-   Ubah URL login di firmware dari `https://` menjadi `http://` jika menggunakan emulator lokal.
-   *(Alternatif: gunakan WiFiClient biasa untuk emulator, WiFiClientSecure untuk production.)*
-
-4. Daftarkan perangkat di emulator:
-   ```bash
-   FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000 \
-   node scripts/register_device.js --mode=emulator SIMETRI_ESP32_001 60
-   ```
-
-5. Unggah firmware ke ESP32 dan pantau Serial Monitor (115200 baud).
+- **`ENABLE_RELAY_CONTROL false`**: Relay secara fisik dipaksa tetap OFF (buka). Perintah dari cloud diterima dan dicatat ke log Serial, tetapi **relay_output_state** tidak diubah menjadi nilai perintah yang diabaikan.
+- **Pemisahan State**:
+  - `requested_power`: Nilai perintah dari node `devices/{deviceId}/control/power`.
+  - `relay_output_state`: Status logika output pin GPIO 14 (bukan status mekanik kontak tanpa sensor umpan balik).
+  - `relay_control_enabled`: Boolean flag apakah eksekusi kontrol relay diizinkan.
+- **Validasi Nilai Perintah**: Respons RTDB `null` atau non-boolean **diabaikan** dan tidak dianggap sebagai perintah OFF.
 
 ---
 
-## Pengujian dengan Firebase Production
+## Validitas Sensor & Penanganan Error
 
-1. Ganti nilai di `secrets.h` ke URL database production.
-2. Pastikan Security Rules di Firebase Console sudah sesuai dengan `database.rules.json`.
-3. Unggah firmware (pastikan `ENABLE_RELAY_CONTROL=false` di `secrets.h` untuk tahap awal).
-4. Verifikasi data muncul di Firebase Console > Realtime Database > `devices/{deviceId}/live`.
+- Jika pembacaan sensor PZEM gagal atau belum siap, firmware **TIDAK MENGIRIM ANGKA 0.0 PALSU** yang menyerupai tegangan normal.
+- Field `voltage`, `current`, `power`, `frequency`, `power_factor` dikirim sebagai `null`.
+- Field `sensor_valid` dikirim sebagai `false`, disertai `reading_age_ms` dan `sensor_status: "stale_or_disconnected"`.
+- Aplikasi Flutter mendeteksi flag ini untuk menampilkan status `SENSOR ERROR` / `STALE` secara transparan kepada pengguna.
 
 ---
 
-## Status ENABLE_RELAY_CONTROL
+## Skema Telemetri RTDB (`devices/{deviceId}/live`)
 
-| Nilai   | Perilaku                                                             |
-|---------|----------------------------------------------------------------------|
-| `false` | Relay TIDAK digerakkan. Perintah diterima dan dicatat ke Serial.    |
-| `true`  | Relay digerakkan sesuai perintah. Aktifkan hanya setelah verifikasi. |
-
-Ubah di `secrets.h`:
-```cpp
-#define ENABLE_RELAY_CONTROL false  // ganti ke true setelah pengujian lengkap
+```json
+{
+  "sensor_valid": true,
+  "reading_age_ms": 250,
+  "last_read_uptime_ms": 145000,
+  "voltage": 220.4,
+  "current": 1.35,
+  "power": 297.5,
+  "frequency": 50.0,
+  "power_factor": 0.98,
+  "energy_kwh": 45.210,
+  "daily_energy": 3.450,
+  "monthly_energy": 112.500,
+  "requested_power": false,
+  "relay_output_state": false,
+  "relay_control_enabled": false,
+  "uptime_ms": 145250,
+  "sent_uptime_ms": 145250,
+  "server_timestamp": 1729300000000
+}
 ```
 
----
-
-## Status Kompilasi
-
-- **Status**: Dikompilasi bersih dengan ESP32 Arduino Core 2.0.14
-- **Board**: ESP32 Dev Module
-- **Peringatan kompilasi**: Tidak ada (0 warnings)
-- **Ukuran flash**: Menggunakan partisi Default (tidak perlu custom)
-- **Catatan**: Timestamp menggunakan `millis()` sebagai sementara.
-  Untuk produksi, integrasikan NTPClient agar timestamp UNIX akurat.
-
----
-
-## Daftar Key Telemetri
-
-Data dikirim ke `devices/{deviceId}/live`:
-
-| Key              | Tipe    | Satuan  | Keterangan                              |
-|------------------|---------|---------|-----------------------------------------|
-| `voltage`        | float   | V       | Tegangan listrik                        |
-| `current`        | float   | A       | Arus listrik                            |
-| `power`          | float   | W       | Daya aktif                              |
-| `energy_kwh`     | float   | kWh     | Total energi kumulatif dari PZEM        |
-| `daily_energy`   | float   | kWh     | Energi sejak ESP32 dinyalakan hari ini  |
-| `monthly_energy` | float   | kWh     | Energi sejak ESP32 dinyalakan bulan ini |
-| `frequency`      | float   | Hz      | Frekuensi jala-jala                     |
-| `power_factor`   | float   | -       | Faktor daya (0.0 – 1.0)                 |
-| `relay_state`    | boolean | -       | Status relay (true=ON, false=OFF)       |
-| `timestamp`      | number  | ms      | millis() saat pengiriman (sementara)    |
-
----
-
-## Batasan Versi Ini
-
-- Timestamp menggunakan `millis()`, bukan waktu UNIX absolut.
-- Histori kalender (energy_data per tanggal) belum diimplementasikan di firmware.
-  Data kalender dapat dihitung oleh Cloud Functions berdasarkan telemetri live.
-- TLS menggunakan `setInsecure()` untuk kemudahan pengujian awal.
-  Ganti dengan `setCACert()` untuk produksi yang sebenarnya.
+*Catatan: `server_timestamp` diisi secara otomatis oleh server Firebase melalui token REST `{".sv": "timestamp"}`, membedakan waktu server dengan waktu lokal ESP32 (`uptime_ms`).*

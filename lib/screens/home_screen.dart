@@ -108,6 +108,9 @@ class _HomeScreenState extends State<HomeScreen> {
             monthlyCost: monthlyCost,
             isLiveStream: true,
             streamSource: SensorStreamService.instance.streamSourceLabel,
+            isSensorValid: reading.isValid,
+            isSensorStale: reading.isStale,
+            sensorStatusMessage: reading.sensorError,
             dailyHistory: currentHistory,
           );
         });
@@ -780,6 +783,8 @@ class _HomeScreenState extends State<HomeScreen> {
           onConfigureLimit: _openPowerLimitPicker,
           isConnected: _isConnected,
           isPowerOn: _devicePower,
+          isSensorValid: _device.isSensorValid,
+          isSensorStale: _device.isSensorStale,
         ),
         const SizedBox(height: 18),
 
@@ -876,6 +881,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     onConfigureLimit: _openPowerLimitPicker,
                     isConnected: _isConnected,
                     isPowerOn: _devicePower,
+                    isSensorValid: _device.isSensorValid,
+                    isSensorStale: _device.isSensorStale,
                   ),
                 ],
               ),

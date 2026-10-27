@@ -6,85 +6,100 @@
 //  Aktifkan mode emulator dengan flag compile-time:
 //    flutter run --dart-define=USE_FIREBASE_EMULATOR=true
 //
-//  JANGAN aktifkan emulator di build produksi/release.
-//  Emulator hanya untuk pengujian lokal dengan Firebase Emulator Suite.
-//
-//  Panduan menjalankan emulator:
-//    cd backend
-//    firebase emulators:start
+//  Host Konfigurasi Berdasarkan Target Perangkat:
+//  - Android Emulator (AVD) : Otomatis menggunakan "10.0.2.2"
+//  - iOS Simulator / Web    : Menggunakan "127.0.0.1"
+//  - Ponsel Fisik (Android/iOS):
+//      flutter run --dart-define=USE_FIREBASE_EMULATOR=true \
+//                  --dart-define=EMULATOR_HOST=192.168.1.50
+//      (Ganti 192.168.1.50 dengan IP komputer pengembang di Wi-Fi yang sama)
 // ============================================================
 
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_database/firebase_database.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 
 /// Apakah mode emulator diaktifkan via --dart-define=USE_FIREBASE_EMULATOR=true
 const bool _kUseEmulator = bool.fromEnvironment('USE_FIREBASE_EMULATOR', defaultValue: false);
 
-/// Alamat host emulator (dapat di-override via --dart-define)
-const String _kEmulatorHost = String.fromEnvironment(
-  'EMULATOR_HOST',
-  defaultValue: '127.0.0.1',
-);
+/// Alamat host eksplisit jika ditentukan via --dart-define=EMULATOR_HOST=...
+const String _kExplicitHost = String.fromEnvironment('EMULATOR_HOST', defaultValue: '');
 
-const int _kAuthEmulatorPort = 9099;
-const int _kDatabaseEmulatorPort = 9000;
-const int _kFunctionsEmulatorPort = 5001;
+const int kAuthEmulatorPort = 9099;
+const int kDatabaseEmulatorPort = 9000;
+const int kFunctionsEmulatorPort = 5001;
 
-/// Project ID emulator yang konsisten — gunakan demo-* agar tidak ada billing
+/// Project ID emulator yang konsisten dan terisolasi
 const String kEmulatorProjectId = 'simetri-app';
 
 /// Namespace database emulator
 const String kEmulatorDatabaseNamespace = 'simetri-app-default-rtdb';
 
-/// Apakah saat ini berjalan dalam mode emulator
+/// Mendapatkan host yang sesuai dengan platform pengujian
+String get emulatorHost {
+  if (_kExplicitHost.isNotEmpty) {
+    return _kExplicitHost;
+  }
+  // Android Emulator (AVD) memetakan 10.0.2.2 ke 127.0.0.1 komputer host
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    return '10.0.2.2';
+  }
+  // iOS Simulator, macOS Desktop, Windows Desktop, dan Web
+  return '127.0.0.1';
+}
+
+/// Status apakah aplikasi saat ini berjalan dalam mode emulator
 bool get isEmulatorMode => _kUseEmulator;
 
-/// Konfigurasi seluruh layanan Firebase ke emulator lokal.
-///
-/// WAJIB dipanggil SEBELUM Firebase.initializeApp() atau sebelum
-/// autentikasi dan listener database dimulai.
-///
-/// Urutan yang benar:
-///   1. WidgetsFlutterBinding.ensureInitialized()
-///   2. await Firebase.initializeApp(...)
-///   3. await EmulatorConfig.configure()   ← harus di sini
-///   4. await AuthService.ensureAnonymousSession()
-///   5. SensorStreamService / listener lain
-Future<void> configureEmulatorIfNeeded() async {
-  if (!_kUseEmulator) {
-    return; // Tidak dalam mode emulator — tidak ada yang diubah
+class EmulatorConfig {
+  /// FirebaseOptions khusus untuk lingkungan emulator lokal.
+  /// Memastikan project ID dan database URL (beserta parameter namespace)
+  /// benar-benar digunakan saat Firebase.initializeApp dipanggil.
+  static FirebaseOptions get emulatorFirebaseOptions {
+    final host = emulatorHost;
+    return FirebaseOptions(
+      apiKey: 'fake-emulator-api-key',
+      appId: '1:1234567890:android:simetri_emulator_app',
+      messagingSenderId: '1234567890',
+      projectId: kEmulatorProjectId,
+      databaseURL: 'http://$host:$kDatabaseEmulatorPort?ns=$kEmulatorDatabaseNamespace',
+      storageBucket: '$kEmulatorProjectId.appspot.com',
+    );
   }
 
-  debugPrint('');
-  debugPrint('════════════════════════════════════════════════════');
-  debugPrint('  MODE EMULATOR AKTIF — Tidak ada akses ke produksi');
-  debugPrint('  Host: $_kEmulatorHost');
-  debugPrint('  Auth Port      : $_kAuthEmulatorPort');
-  debugPrint('  Database Port  : $_kDatabaseEmulatorPort');
-  debugPrint('  Functions Port : $_kFunctionsEmulatorPort');
-  debugPrint('  Project ID     : $kEmulatorProjectId');
-  debugPrint('════════════════════════════════════════════════════');
+  /// Konfigurasi seluruh layanan Firebase SDK (Auth, RTDB, Functions) ke emulator lokal.
+  static Future<void> configure() async {
+    if (!_kUseEmulator) return;
 
-  // 1. Auth Emulator — harus dikonfigurasi sebelum signIn apa pun
-  await FirebaseAuth.instance.useAuthEmulator(
-    _kEmulatorHost,
-    _kAuthEmulatorPort,
-  );
+    final host = emulatorHost;
 
-  // 2. Realtime Database Emulator
-  FirebaseDatabase.instance.useDatabaseEmulator(
-    _kEmulatorHost,
-    _kDatabaseEmulatorPort,
-  );
+    debugPrint('');
+    debugPrint('════════════════════════════════════════════════════');
+    debugPrint('  MODE EMULATOR AKTIF');
+    debugPrint('  Target Host    : $host');
+    debugPrint('  Auth Port      : $kAuthEmulatorPort');
+    debugPrint('  Database Port  : $kDatabaseEmulatorPort (ns: $kEmulatorDatabaseNamespace)');
+    debugPrint('  Functions Port : $kFunctionsEmulatorPort');
+    debugPrint('  Project ID     : $kEmulatorProjectId');
+    debugPrint('════════════════════════════════════════════════════');
 
-  // 3. Cloud Functions Emulator
-  FirebaseFunctions.instance.useFunctionsEmulator(
-    _kEmulatorHost,
-    _kFunctionsEmulatorPort,
-  );
+    // 1. Auth Emulator
+    await FirebaseAuth.instance.useAuthEmulator(host, kAuthEmulatorPort);
 
-  debugPrint('  ✓ Semua layanan Firebase dikonfigurasi ke emulator lokal.');
-  debugPrint('');
+    // 2. Realtime Database Emulator
+    FirebaseDatabase.instance.useDatabaseEmulator(host, kDatabaseEmulatorPort);
+
+    // 3. Cloud Functions Emulator
+    FirebaseFunctions.instance.useFunctionsEmulator(host, kFunctionsEmulatorPort);
+
+    debugPrint('  ✓ Layanan Firebase terhubung ke emulator lokal.');
+    debugPrint('');
+  }
+}
+
+/// Helper fungsi untuk backward compatibility panggilan di main.dart
+Future<void> configureEmulatorIfNeeded() async {
+  await EmulatorConfig.configure();
 }

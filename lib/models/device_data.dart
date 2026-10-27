@@ -18,9 +18,12 @@ class DeviceData {
   final int powerLimitVa;
   final double monthlyBudgetRp;
 
-  // Status Live Streaming
+  // Status Live Streaming & Sensor Health
   final bool isLiveStream;
   final String streamSource; // e.g. "Firebase RTDB", "Simulasi Real-Time", "Offline"
+  final bool isSensorValid;
+  final bool isSensorStale;
+  final String? sensorStatusMessage;
 
   // Chart data
   final List<double> dailyHistory; // 7 hari terakhir (Sen - Min)
@@ -44,6 +47,9 @@ class DeviceData {
     this.monthlyBudgetRp = 300000,
     this.isLiveStream = false,
     this.streamSource = 'Dummy',
+    this.isSensorValid = true,
+    this.isSensorStale = false,
+    this.sensorStatusMessage,
     this.dailyHistory = const [2.1, 3.5, 1.8, 4.2, 3.1, 5.0, 4.5],
     required this.monthlyEnergyHistory,
     required this.monthlyCostHistory,
@@ -68,6 +74,9 @@ class DeviceData {
       monthlyBudgetRp: 300000,
       isLiveStream: false,
       streamSource: 'Offline',
+      isSensorValid: false,
+      isSensorStale: true,
+      sensorStatusMessage: 'Perangkat belum terhubung',
       dailyHistory: const [],
       monthlyEnergyHistory: const [],
       monthlyCostHistory: const [],
@@ -91,6 +100,9 @@ class DeviceData {
     double? monthlyBudgetRp,
     bool? isLiveStream,
     String? streamSource,
+    bool? isSensorValid,
+    bool? isSensorStale,
+    String? sensorStatusMessage,
     List<double>? dailyHistory,
     List<double>? monthlyEnergyHistory,
     List<double>? monthlyCostHistory,
@@ -112,6 +124,9 @@ class DeviceData {
       monthlyBudgetRp: monthlyBudgetRp ?? this.monthlyBudgetRp,
       isLiveStream: isLiveStream ?? this.isLiveStream,
       streamSource: streamSource ?? this.streamSource,
+      isSensorValid: isSensorValid ?? this.isSensorValid,
+      isSensorStale: isSensorStale ?? this.isSensorStale,
+      sensorStatusMessage: sensorStatusMessage ?? this.sensorStatusMessage,
       dailyHistory: dailyHistory ?? this.dailyHistory,
       monthlyEnergyHistory: monthlyEnergyHistory ?? this.monthlyEnergyHistory,
       monthlyCostHistory: monthlyCostHistory ?? this.monthlyCostHistory,
