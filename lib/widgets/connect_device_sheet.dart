@@ -94,25 +94,48 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
 
       bool espOnline = false;
       try {
-        final statusSnapshot = await FirebaseDatabase.instance
-            .ref('devices/$deviceId/status')
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        const maxStaleMs = 30000; // 30 detik toleransi data segar
+
+        // 1. Periksa node live telemetry (server_timestamp aktual yang dikirimkan firmware)
+        final liveSnapshot = await FirebaseDatabase.instance
+            .ref('devices/$deviceId/live')
             .get();
-        if (statusSnapshot.exists) {
-          final val = statusSnapshot.value;
-          if (val is Map && val['online'] == true) {
+
+        if (liveSnapshot.exists && liveSnapshot.value is Map) {
+          final liveMap = liveSnapshot.value as Map;
+          final dynamic rawTs = liveMap['server_timestamp'] ?? liveMap['timestamp'];
+          int? lastTs;
+          if (rawTs is int) {
+            lastTs = rawTs;
+          } else if (rawTs is num) {
+            lastTs = rawTs.toInt();
+          }
+
+          if (lastTs != null && (nowMs - lastTs).abs() < maxStaleMs) {
             espOnline = true;
           }
         }
 
-        // Cek juga timestamp telemetri terakhir jika ada
+        // 2. Jika live telemetry tidak memenuhi, periksa node status
+        // PENTING: Jangan menganggap flag online=true yang sudah lama sebagai bukti online
         if (!espOnline) {
-          final liveSnapshot = await FirebaseDatabase.instance
-              .ref('devices/$deviceId/live/timestamp')
+          final statusSnapshot = await FirebaseDatabase.instance
+              .ref('devices/$deviceId/status')
               .get();
-          if (liveSnapshot.exists) {
-            final lastTs = liveSnapshot.value as int? ?? 0;
-            // Jika data diterima dalam 45 detik terakhir, perangkat dianggap online
-            if (DateTime.now().millisecondsSinceEpoch - lastTs < 45000) {
+          if (statusSnapshot.exists && statusSnapshot.value is Map) {
+            final val = statusSnapshot.value as Map;
+            final isOnlineFlag = val['online'] == true;
+            final dynamic rawStatusTs = val['last_seen'] ?? val['updated_at'] ?? val['timestamp'];
+            int? statusTs;
+            if (rawStatusTs is int) {
+              statusTs = rawStatusTs;
+            } else if (rawStatusTs is num) {
+              statusTs = rawStatusTs.toInt();
+            }
+
+            // Hanya anggap online jika flag bernilai true DAN timestamp status masih segar
+            if (isOnlineFlag && statusTs != null && (nowMs - statusTs).abs() < maxStaleMs) {
               espOnline = true;
             }
           }

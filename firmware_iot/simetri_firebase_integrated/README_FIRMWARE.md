@@ -126,3 +126,32 @@ Nilai default adalah `false` (Staging Guard).
 ```
 
 *Catatan: `server_timestamp` diisi secara otomatis oleh server Firebase melalui token REST `{".sv": "timestamp"}`, membedakan waktu server dengan waktu lokal ESP32 (`uptime_ms`).*
+
+---
+
+## Sertifikat TLS & Sinkronisasi Waktu Firmware
+
+1. **Sertifikat Root CA Google Trust Services (`root_ca.h`)**:
+   - Menggunakan sertifikat autentik **GTS Root R1** (valid hingga 22 Juni 2036, SHA-256 Fingerprint `D9:47:43:2A:BD:E7:B7:FA:90:FC:2E:6B:59:10:1B:12:80:E0:E1:C7:E4:E4:0F:A3:C6:88:7F:FF:57:A7:F4:CF`).
+   - Mencegah `client.setInsecure()` dan memproteksi koneksi cloud dari serangan man-in-the-middle.
+
+2. **Sinkronisasi Waktu SNTP**:
+   - Validasi sertifikat TLS X.509 memeriksa masa berlaku (`notBefore` dan `notAfter`).
+   - Tanpa sinkronisasi waktu, jam bawaan ESP32 mulai dari Unix Epoch 0 (1 Januari 1970). Karena sertifikat GTS Root R1 dimulai pada 22 Juni 2016, TLS handshake akan ditolak (`MBEDTLS_X509_BADCERT_FUTURE`).
+   - Firmware memanggil `configTime(0, 0, "pool.ntp.org", "time.google.com")` segera setelah Wi-Fi terhubung dan menunggu sinkronisasi waktu sebelum memulai sesi TLS produksi.
+
+---
+
+## Analisis Dampak Operasi HTTP Sinkron
+
+Firmware menggunakan `HTTPClient` Arduino yang bersifat **sinkron / blocking** pada Core 1:
+
+1. **Dampak terhadap Pembacaan Sensor (PZEM-004T)**:
+   - Setiap panggilan HTTP (`http.PUT`, `http.GET`, `http.POST`) membutuhkan waktu 200 ms - 3000 ms tergantung latensi jaringan dan TLS handshake.
+   - Selama waktu tersebut, interval pembacaan sensor (1000 ms) akan mengalami *jitter* / penundaan. Usia pembacaan sensor (`reading_age_ms`) bertambah hingga operasi jaringan selesai.
+   - Firmware memitigasi hal ini dengan membatasi `NETWORK_TIMEOUT_MS` (3000 ms) agar loop tidak terblokir permanen, serta mencatat `reading_age_ms` aktual pada telemetri.
+
+2. **Dampak terhadap Tombol Navigasi (GPIO 25, 26, 27)**:
+   - Tombol dibaca secara *polling* dalam fungsi `tanganiTombol()` di `loop()`.
+   - Jika pengguna menekan tombol saat ESP32 sedang menunggu respons HTTP/TLS, penekanan tombol dapat terlewat (*dropped button press*).
+   - **Rekomendasi Arsitektur Masa Depan**: Memindahkan `tanganiTombol()` ke *hardware interrupt* (`attachInterrupt`) atau memindahkan operasi jaringan Firebase ke *FreeRTOS Task* terpisah pada Core 0 (dual-core ESP32) dengan antrean data (*FreeRTOS Queue*).

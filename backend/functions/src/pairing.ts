@@ -285,15 +285,31 @@ export async function handleClaimDevice(
       const currentSecretVal = txSecretResult.snapshot.val() as PairingSecretData | null;
       if (currentSecretVal && currentSecretVal.usedBy === callerUid) {
         // Permintaan paralel dari UID yang sama baru saja menyelesaikan klaim dengan sukses.
-        // VERIFIKASI: Konfirmasi permission aktif benar-benar tersedia sebelum laporkan sukses.
-        const verifyParallelSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
+        // Tunggu sejenak jika operasi paralel sedang dalam proses menyimpan permissions.
+        let verifyParallelSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
         if (!verifyParallelSnap.exists() || verifyParallelSnap.val()?.status !== 'active') {
-          // Operasi paralel belum selesai menyimpan permission — tunggu atau laporkan gagal.
-          throw new HttpsError(
-            'aborted',
-            'Klaim sedang dalam proses. Izin akses belum siap. Silakan coba lagi.'
-          );
+          for (let i = 0; i < 6; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            verifyParallelSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
+            if (verifyParallelSnap.exists() && verifyParallelSnap.val()?.status === 'active') {
+              break;
+            }
+          }
         }
+
+        // Jika operasi paralel belum sempat menyimpan permission, simpan secara idempoten
+        // karena hak kepemilikan secret sudah terbukti sah untuk callerUid ini.
+        if (!verifyParallelSnap.exists() || verifyParallelSnap.val()?.status !== 'active') {
+          const fallbackUpdates: Record<string, unknown> = {};
+          fallbackUpdates[`permissions/${callerUid}/${deviceId}`] = {
+            role: 'owner',
+            status: 'active',
+            grantedAt: currentSecretVal.usedAt || now,
+          };
+          fallbackUpdates[`pairing_rate_limits/${callerUid}`] = null;
+          await db.ref().update(fallbackUpdates);
+        }
+
         return {
           success: true,
           deviceId,

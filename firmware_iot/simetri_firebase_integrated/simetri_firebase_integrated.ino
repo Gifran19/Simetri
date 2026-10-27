@@ -557,6 +557,11 @@ void kelolaKoneksiWiFi(unsigned long sekarang) {
       wifiTerhubung = true;
       Serial.printf("[WiFi] Terhubung sukses. IP: %s | RSSI: %d dBm\n",
         WiFi.localIP().toString().c_str(), WiFi.RSSI());
+#if !USE_FIREBASE_EMULATOR
+      // Sinkronisasi waktu sistem via SNTP penting untuk validasi masa berlaku sertifikat TLS (X.509)
+      Serial.println("[NTP] Mengonfigurasi sinkronisasi waktu SNTP untuk TLS...");
+      configTime(0, 0, "pool.ntp.org", "time.google.com");
+#endif
     }
   } else {
     if (wifiTerhubung) {
@@ -669,6 +674,25 @@ String buildRtdbControlUrl() {
 
 bool loginFirebase() {
   Serial.println("[AUTH] Memulai autentikasi ke Firebase...");
+
+#if !USE_FIREBASE_EMULATOR
+  // Pastikan jam sistem sudah tersinkronisasi via SNTP agar verifikasi sertifikat TLS valid
+  time_t nowSec = time(nullptr);
+  if (nowSec < 1600000000) {
+    Serial.println("[NTP] Menunggu sinkronisasi waktu sebelum autentikasi TLS...");
+    int ntpWait = 0;
+    while (time(nullptr) < 1600000000 && ntpWait < 15) {
+      delay(200);
+      ntpWait++;
+    }
+    nowSec = time(nullptr);
+    if (nowSec >= 1600000000) {
+      Serial.printf("[NTP] Waktu sistem tersinkronisasi: %ld\n", (long)nowSec);
+    } else {
+      Serial.println("[NTP] Peringatan: Jam sistem belum sinkron. Handshake TLS mungkin gagal.");
+    }
+  }
+#endif
 
   String url = buildAuthUrl();
   HTTPClient http;

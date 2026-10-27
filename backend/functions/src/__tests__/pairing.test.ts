@@ -14,15 +14,27 @@ const FUNCTIONS_EMULATOR_HOST = process.env.FIREBASE_FUNCTIONS_EMULATOR_HOST || 
 process.env.FIREBASE_DATABASE_EMULATOR_HOST = EMULATOR_HOST;
 process.env.FIREBASE_AUTH_EMULATOR_HOST = AUTH_EMULATOR_HOST;
 
-if (admin.apps.length === 0) {
-  admin.initializeApp({
-    projectId: PROJECT_ID,
-    databaseURL: `http://${EMULATOR_HOST}?ns=${DATABASE_NAMESPACE}`,
-  });
-}
+let db: admin.database.Database;
+let auth: admin.auth.Auth;
 
-const db = admin.database();
-const auth = admin.auth();
+/**
+ * Memeriksa apakah Firebase Emulator aktif dengan timeout ketat (3 detik).
+ * Mencegah proses pengujian menggantung tanpa batas jika emulator tidak tersedia.
+ */
+async function verifyEmulatorAvailability(): Promise<void> {
+  const timeoutMs = 2500;
+  try {
+    await fetch(`http://${AUTH_EMULATOR_HOST}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err: any) {
+    throw new Error(
+      `[EMULATOR_OFFLINE] Firebase Emulator Suite tidak tersedia di ${AUTH_EMULATOR_HOST} / ${EMULATOR_HOST}. ` +
+      `Pastikan pengujian dijalankan dengan 'npx firebase-tools emulators:exec ...' atau emulator telah berjalan. ` +
+      `Detail: ${err.message}`
+    );
+  }
+}
 
 /**
  * Helper: Menghasilkan ID Token JWT asli dari Auth Emulator untuk UID tertentu.
@@ -36,6 +48,7 @@ async function getIdTokenForUid(uid: string): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+    signal: AbortSignal.timeout(5000),
   });
 
   if (!res.ok) {
@@ -56,6 +69,7 @@ async function createAnonymousUserInEmulator(): Promise<{ uid: string; idToken: 
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ returnSecureToken: true }),
+    signal: AbortSignal.timeout(5000),
   });
 
   if (!res.ok) {
@@ -70,7 +84,26 @@ async function createAnonymousUserInEmulator(): Promise<{ uid: string; idToken: 
 describe('SIMETRI Production-Grade Pairing & Security Verification Suite', () => {
 
   before(async () => {
-    await db.ref().set(null);
+    // 1. Verifikasi ketersediaan emulator terlebih dahulu
+    await verifyEmulatorAvailability();
+
+    // 2. Inisialisasi Firebase Admin hanya setelah emulator dipastikan aktif
+    if (admin.apps.length === 0) {
+      admin.initializeApp({
+        projectId: PROJECT_ID,
+        databaseURL: `http://${EMULATOR_HOST}?ns=${DATABASE_NAMESPACE}`,
+      });
+    }
+    db = admin.database();
+    auth = admin.auth();
+
+    // 3. Reset database
+    await Promise.race([
+      db.ref().set(null),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('[EMULATOR_TIMEOUT] Database Emulator tidak merespons dalam 4 detik')), 4000)
+      ),
+    ]);
   });
 
   after(async () => {
