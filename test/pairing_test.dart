@@ -50,10 +50,9 @@ void main() {
         ),
       );
 
-      expect(find.text('Pairing Smart Meter ESP32'), findsOneWidget);
-      expect(find.text('Kode / ID Perangkat ESP32:'), findsOneWidget);
-      expect(find.text('simetri_01'), findsWidgets);
-      expect(find.text('Hubungkan Perangkat Ini'), findsOneWidget);
+      expect(find.text('Pairing Perangkat SIMETRI'), findsOneWidget);
+      expect(find.text('Kode Pairing Sementara:'), findsOneWidget);
+      expect(find.text('Verifikasi & Hubungkan'), findsOneWidget);
     });
   });
 }

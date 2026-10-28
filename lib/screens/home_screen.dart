@@ -2,14 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import 'energy_screen.dart';
 import '../firebase_options.dart';
 import '../models/device_data.dart';
 import '../models/sensor_reading.dart';
 import '../services/device_service.dart';
+import '../services/live_status.dart';
 import '../services/sensor_stream_service.dart';
 import '../services/security_service.dart';
-import '../utils/responsive.dart';
 import '../widgets/home_header.dart';
 import '../widgets/device_status_card.dart';
 import '../widgets/tariff_card.dart';
@@ -35,8 +34,13 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _isConnected = false;
-  bool _devicePower = false;
   DeviceData _device = DeviceData.disconnected();
+
+  // Status kontrol relay & konfirmasi telemetri
+  bool _relayPending = false;
+  bool _desiredRelay = false;
+  DateTime? _baselineTimestamp;
+  Timer? _pendingTimer;
 
   StreamSubscription<SensorReading>? _sensorSubscription;
   final NumberFormat _currencyFormatter = NumberFormat.currency(
@@ -45,22 +49,34 @@ class _HomeScreenState extends State<HomeScreen> {
     decimalDigits: 0,
   );
 
+  LiveStatus get _status => SensorStreamService.instance.status;
+  SensorReading? get _latestReading => SensorStreamService.instance.latestReading;
+
   @override
   void initState() {
     super.initState();
-    _initSensorStream();
-    _loadSavedConnectionState();
+    SensorStreamService.instance.statusNotifier.addListener(_onStatusChanged);
     DeviceService.connectionNotifier.addListener(_onConnectionNotifierChanged);
     DeviceService.deviceIdNotifier.addListener(_onDeviceIdChanged);
+    _initSensorStream();
+    _loadSavedConnectionState();
   }
 
   @override
   void dispose() {
+    _pendingTimer?.cancel();
+    SensorStreamService.instance.statusNotifier.removeListener(_onStatusChanged);
     DeviceService.connectionNotifier.removeListener(_onConnectionNotifierChanged);
     DeviceService.deviceIdNotifier.removeListener(_onDeviceIdChanged);
     _sensorSubscription?.cancel();
     SensorStreamService.instance.stopStreaming();
     super.dispose();
+  }
+
+  void _onStatusChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _onDeviceIdChanged() {
@@ -76,24 +92,82 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Langganan stream data sensor real-time (Firebase RTDB / Intelligent Simulator)
+  void _clearRelayPending() {
+    _pendingTimer?.cancel();
+    _pendingTimer = null;
+    if (mounted) {
+      setState(() {
+        _relayPending = false;
+      });
+    }
+  }
+
+  void _showNotification(String message, {bool isWarning = false}) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xff0D1F3C),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: isWarning ? Colors.amber : const Color(0xff00D9A6),
+            width: 1,
+          ),
+        ),
+        content: Row(
+          children: [
+            Icon(
+              isWarning ? Icons.warning_amber_rounded : Icons.info_outline_rounded,
+              color: isWarning ? Colors.amber : const Color(0xff00D9A6),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  /// Langganan stream data sensor real-time dari Firebase RTDB
   void _initSensorStream() {
     _sensorSubscription = SensorStreamService.instance.readingStream.listen((reading) {
       if (!mounted) return;
-      if (_isConnected && _devicePower) {
+
+      // Konfirmasi perintah relay dari telemetri baru
+      if (_relayPending) {
+        final confirmState = evaluateRelayConfirmation(
+          desired: _desiredRelay,
+          baselineTimestamp: _baselineTimestamp,
+          latest: reading,
+        );
+
+        if (confirmState == RelayCommandState.receivedControlDisabled) {
+          _clearRelayPending();
+          _showNotification(
+            'Perangkat menerima perintah, tetapi kontrol relay dinonaktifkan di firmware (ENABLE_RELAY_CONTROL=false).',
+            isWarning: true,
+          );
+        } else if (confirmState == RelayCommandState.outputReported) {
+          _clearRelayPending();
+          _showNotification(
+            'Perangkat mengonfirmasi status output relay: ${_desiredRelay ? 'ON' : 'OFF'} (sinyal GPIO terkonfirmasi).',
+          );
+        }
+      }
+
+      if (_isConnected) {
         final currentTariff = DeviceService.currentTariff;
         final double dailyCost = reading.dailyEnergyKwh * currentTariff;
         final double monthlyCost = reading.monthlyEnergyKwh * currentTariff;
-
-        // Perbarui data grafik harian (hari ini dinamis mengikuti akumulasi sensor)
-        final currentHistory = List<double>.from(
-          _device.dailyHistory.isEmpty
-              ? [2.1, 3.5, 1.8, 4.2, 3.1, 5.0, 4.5]
-              : _device.dailyHistory,
-        );
-        if (currentHistory.isNotEmpty) {
-          currentHistory[currentHistory.length - 1] = reading.dailyEnergyKwh;
-        }
 
         setState(() {
           _device = _device.copyWith(
@@ -106,38 +180,34 @@ class _HomeScreenState extends State<HomeScreen> {
             dailyCost: dailyCost,
             monthlyEnergy: reading.monthlyEnergyKwh,
             monthlyCost: monthlyCost,
-            isLiveStream: true,
-            streamSource: SensorStreamService.instance.streamSourceLabel,
+            isLiveStream: reading.isFromFirebase,
+            streamSource: SensorStreamService.instance.sourceLabel,
             isSensorValid: reading.isValid,
             isSensorStale: reading.isStale,
             sensorStatusMessage: reading.sensorError,
-            dailyHistory: currentHistory,
           );
         });
       }
     });
   }
 
-  /// Memuat status koneksi dan power yang tersimpan sebelumnya
+  /// Memuat status koneksi yang tersimpan sebelumnya
   Future<void> _loadSavedConnectionState() async {
     final savedConnected = await DeviceService.isDeviceConnected();
-    final savedPower = await DeviceService.getDevicePower();
     final powerLimit = await DeviceService.getPowerLimit();
     final budget = await DeviceService.getMonthlyBudget();
 
     if (!mounted) return;
     setState(() {
       _isConnected = savedConnected;
-      _devicePower = savedPower;
       _device = DeviceService.getDeviceData(
         isConnected: savedConnected,
-        isPowerOn: savedPower,
         powerLimitVa: powerLimit,
         monthlyBudgetRp: budget,
       );
     });
 
-    if (savedConnected && savedPower) {
+    if (savedConnected) {
       SensorStreamService.instance.startStreaming();
     }
   }
@@ -153,17 +223,14 @@ class _HomeScreenState extends State<HomeScreen> {
         return ConnectDeviceSheet(
           onConnected: (connectedData) async {
             await DeviceService.saveConnectionState(true);
-            await DeviceService.saveDevicePower(true);
             final powerLimit = await DeviceService.getPowerLimit();
             final budget = await DeviceService.getMonthlyBudget();
 
             if (!mounted) return;
             setState(() {
               _isConnected = true;
-              _devicePower = true;
               _device = DeviceService.getDeviceData(
                 isConnected: true,
-                isPowerOn: true,
                 powerLimitVa: powerLimit,
                 monthlyBudgetRp: budget,
               );
@@ -186,7 +253,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Smart Meter ESP32 terhubung! Data sensor PZEM-004T tersalurkan.',
+                        'Smart Meter ESP32 terhubung! Memantau telemetri telemetri nyata.',
                         style: TextStyle(color: Colors.white, fontSize: 13),
                       ),
                     ),
@@ -221,7 +288,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           content: const Text(
-            'Perangkat saat ini aktif mengirim data sensor tegangan, arus, dan daya.\n\nApakah Anda ingin memutuskan koneksi?',
+            'Apakah Anda ingin memutuskan koneksi perangkat Smart Meter ini dari dashboard?',
             style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
           ),
           actions: [
@@ -248,16 +315,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   return;
                 }
 
-                await DeviceService.saveConnectionState(false);
-                await DeviceService.saveDevicePower(false);
-
-                // Hentikan stream sensor
+                _clearRelayPending();
+                await DeviceService.clearPairedDevice();
                 SensorStreamService.instance.stopStreaming();
 
                 if (!mounted) return;
                 setState(() {
                   _isConnected = false;
-                  _devicePower = false;
                   _device = DeviceData.disconnected();
                 });
 
@@ -280,13 +344,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void togglePower(bool value) async {
     if (!_isConnected) return;
 
-    final messenger = ScaffoldMessenger.of(context);
-
     // Keamanan: Minta otorisasi pengguna (Biometrik / PIN)
-    final actionTitle = value ? 'Nyalakan Smart Meter' : 'Matikan Smart Meter';
+    final actionTitle = value ? 'Nyalakan Saklar Relay' : 'Matikan Saklar Relay';
     final actionDesc = value
-        ? 'Verifikasi identitas untuk mengaktifkan kembali pemantauan sensor.'
-        : 'Verifikasi identitas untuk menonaktifkan pemantauan Smart Meter.';
+        ? 'Verifikasi identitas untuk mengirim perintah menyalakan saklar relay.'
+        : 'Verifikasi identitas untuk mengirim perintah mematikan saklar relay.';
 
     final authorized = await SecurityService.requestAuthorization(
       context: context,
@@ -295,71 +357,60 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (!authorized) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Otorisasi dibatalkan. Status Smart Meter tidak berubah.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      _showNotification('Otorisasi dibatalkan. Status saklar tidak berubah.', isWarning: true);
       return;
     }
 
-    await DeviceService.saveDevicePower(value);
-    final powerLimit = await DeviceService.getPowerLimit();
-    final budget = await DeviceService.getMonthlyBudget();
-
-    // Kirim sinyal kontrol relay fisik ke ESP32 & sesuaikan streaming
-    if (value) {
-      SensorStreamService.instance.setRelayPower(true);
-      SensorStreamService.instance.startStreaming();
-    } else {
-      SensorStreamService.instance.setRelayPower(false);
-      SensorStreamService.instance.pauseStreamingToZero();
+    if (!_status.deviceReachable) {
+      _showNotification('Perangkat sedang offline. Perintah saklar tidak dapat dikirim.', isWarning: true);
+      return;
     }
 
-    if (!mounted) return;
-    setState(() {
-      _devicePower = value;
-      _device = DeviceService.getDeviceData(
-        isConnected: true,
-        isPowerOn: value,
-        powerLimitVa: powerLimit,
-        monthlyBudgetRp: budget,
-      );
-    });
+    _desiredRelay = value;
+    _baselineTimestamp = _latestReading?.timestamp;
 
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xff0D1F3C),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(
-            color: value ? const Color(0xff00D9A6) : Colors.orangeAccent,
-            width: 1,
-          ),
-        ),
-        content: Row(
-          children: [
-            Icon(
-              value ? Icons.power_rounded : Icons.power_off_rounded,
-              color: value ? const Color(0xff00D9A6) : Colors.orangeAccent,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                value
-                    ? 'Perangkat IoT dinyalakan (ON). Aliran data sensor aktif kembali.'
-                    : 'Perangkat IoT dimatikan (OFF). Aliran data sensor dinonaktifkan.',
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    // Tulis perintah ke Firebase RTDB
+    final result = await SensorStreamService.instance.writeRelayCommand(value);
+
+    switch (result) {
+      case RelayWriteResult.deviceNotReachable:
+        _showNotification('Perangkat tidak terjangkau. Perintah dibatalkan.', isWarning: true);
+        return;
+      case RelayWriteResult.demoNotSent:
+        _showNotification('Mode DEMO: perintah tidak dikirim ke perangkat nyata.', isWarning: true);
+        return;
+      case RelayWriteResult.firebaseUnavailable:
+        _showNotification('Firebase belum siap. Periksa koneksi internet.', isWarning: true);
+        return;
+      case RelayWriteResult.permissionDenied:
+        _showNotification('Izin ditolak oleh server Firebase.', isWarning: true);
+        return;
+      case RelayWriteResult.timedOut:
+        _showNotification('Gagal mengirim perintah: waktu habis.', isWarning: true);
+        return;
+      case RelayWriteResult.failed:
+        _showNotification('Gagal mengirim perintah ke server.', isWarning: true);
+        return;
+      case RelayWriteResult.written:
+        setState(() {
+          _relayPending = true;
+        });
+
+        // Pasang timeout 20 detik untuk konfirmasi telemetri
+        _pendingTimer?.cancel();
+        _pendingTimer = Timer(kRelayConfirmTimeout, () {
+          if (_relayPending && mounted) {
+            _clearRelayPending();
+            _showNotification(
+              'Batas waktu konfirmasi habis (20 detik). Perangkat belum melaporkan perubahan status relay.',
+              isWarning: true,
+            );
+          }
+        });
+
+        _showNotification('Perintah terkirim ke server. Menunggu konfirmasi telemetri perangkat...');
+        break;
+    }
   }
 
   Future<void> _openPowerLimitPicker() async {
@@ -439,186 +490,151 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Dialog modal info status stream dan pengujian Firebase
+  /// Dialog modal info status stream telemetri nyata
   void _showStreamInfoModal() {
     final isFbReady = DefaultFirebaseOptions.isConfigured;
-    final isReceivingFb = SensorStreamService.instance.isReceivingRealFirebase;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 520),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 32),
-                  decoration: const BoxDecoration(
-                    color: Color(0xff0D1F3C),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 32),
+              decoration: const BoxDecoration(
+                color: Color(0xff0D1F3C),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 18),
+                  Row(
                     children: [
-                      Center(
-                        child: Container(
-                          width: 40,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.white24,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: const Color(0xff00D9A6).withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Icon(Icons.sensors_rounded, color: Color(0xff00D9A6)),
-                          ),
-                          const SizedBox(width: 14),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Status Integrasi Sensor',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                SizedBox(height: 2),
-                                Text(
-                                  'PZEM-004T + ESP32 via Firebase RTDB',
-                                  style: TextStyle(color: Colors.white54, fontSize: 12),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-
-                      // Status Info Card
                       Container(
-                        padding: const EdgeInsets.all(14),
+                        padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: const Color(0xff071426),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: isReceivingFb
-                                ? const Color(0xff00D9A6)
-                                : Colors.amber.withValues(alpha: 0.3),
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            _buildInfoRow(
-                              'Sumber Data',
-                              SensorStreamService.instance.streamSourceLabel,
-                              valueColor: isReceivingFb ? const Color(0xff00D9A6) : Colors.amber,
-                            ),
-                            const Divider(color: Colors.white12, height: 16),
-                            _buildInfoRow(
-                              'Konfigurasi Firebase',
-                              isFbReady ? 'Sudah Terpasang' : 'Belum Terisi (Dummy Keys)',
-                              valueColor: isFbReady ? const Color(0xff00D9A6) : Colors.orangeAccent,
-                            ),
-                            const Divider(color: Colors.white12, height: 16),
-                            _buildInfoRow(
-                              'Node RTDB Target',
-                              'devices/simetri_01/live',
-                              valueColor: Colors.cyanAccent,
-                            ),
-                            const Divider(color: Colors.white12, height: 16),
-                            _buildInfoRow(
-                              'Tegangan Saat Ini',
-                              '${_device.voltage.toStringAsFixed(1)} V',
-                            ),
-                            const Divider(color: Colors.white12, height: 16),
-                            _buildInfoRow(
-                              'Daya Aktif Saat Ini',
-                              '${_device.power.toStringAsFixed(1)} W',
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-
-                      // Penjelasan Status IoT
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.blueAccent.withValues(alpha: 0.1),
+                          color: const Color(0xff00D9A6).withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.2)),
                         ),
-                        child: const Row(
+                        child: const Icon(Icons.sensors_rounded, color: Color(0xff00D9A6)),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.info_outline_rounded, color: Colors.lightBlueAccent, size: 20),
-                            SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'ESP32 sedang dikembangkan oleh rekan magang. Simulator sensor aktif otomatis sehingga Anda tetap dapat menguji dashboard, visualizer, dan kalkulasi biaya.',
-                                style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+                            Text(
+                              'Status Integrasi Telemetri',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                               ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Data nyata PZEM-004T + ESP32 via Firebase RTDB',
+                              style: TextStyle(color: Colors.white54, fontSize: 12),
                             ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 18),
-
-                      // Tombol Uji Kirim Data Firebase
-                      if (isFbReady)
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: () async {
-                              final success = await SensorStreamService.instance.sendTestPacketToFirebase();
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  backgroundColor: const Color(0xff0D1F3C),
-                                  content: Text(
-                                    success
-                                        ? 'Data uji berhasil dikirim ke Firebase RTDB!'
-                                        : 'Gagal kirim ke Firebase. Periksa koneksi internet / rules.',
-                                    style: TextStyle(
-                                      color: success ? const Color(0xff00D9A6) : Colors.redAccent,
-                                    ),
-                                  ),
-                                ),
-                              );
-                              Navigator.pop(ctx);
-                            },
-                            icon: const Icon(Icons.cloud_upload_rounded),
-                            label: const Text('Kirim Data Uji ke Firebase'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xff00D9A6),
-                              foregroundColor: Colors.black,
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                          ),
-                        ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 18),
+
+                  // Status Info Card
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xff071426),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _status.deviceReachable
+                            ? const Color(0xff00D9A6)
+                            : Colors.amber.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        _buildInfoRow(
+                          'Sumber Data',
+                          SensorStreamService.instance.sourceLabel,
+                          valueColor: _status.deviceReachable ? const Color(0xff00D9A6) : Colors.amber,
+                        ),
+                        const Divider(color: Colors.white12, height: 16),
+                        _buildInfoRow(
+                          'Status Perangkat',
+                          _status.badge,
+                          valueColor: _status == LiveStatus.live
+                              ? const Color(0xff00D9A6)
+                              : (_status == LiveStatus.demo ? Colors.purpleAccent : Colors.amber),
+                        ),
+                        const Divider(color: Colors.white12, height: 16),
+                        _buildInfoRow(
+                          'Konfigurasi Firebase',
+                          isFbReady ? 'Sudah Terpasang' : 'Belum Dikonfigurasi',
+                          valueColor: isFbReady ? const Color(0xff00D9A6) : Colors.orangeAccent,
+                        ),
+                        const Divider(color: Colors.white12, height: 16),
+                        _buildInfoRow(
+                          'Node RTDB Target',
+                          SensorStreamService.instance.rtdbLivePath,
+                          valueColor: Colors.cyanAccent,
+                        ),
+                        const Divider(color: Colors.white12, height: 16),
+                        _buildInfoRow(
+                          'Keterangan',
+                          _status.description,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Penjelasan Mode Pemantauan
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blueAccent.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.2)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.info_outline_rounded, color: Colors.lightBlueAccent, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            kDemoMode
+                                ? 'Aplikasi berjalan dalam mode DEMO eksplisit. Data yang ditampilkan adalah simulasi.'
+                                : 'Mode Pemantauan Nyata aktif. Tidak ada fallback otomatis ke data simulator. Nilai hanya ditampilkan jika telemetri valid diterima dari perangkat.',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            );
-          },
+            ),
+          ),
         );
       },
     );
@@ -644,8 +660,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Badge status stream sensor (Realtime indicator)
   Widget _buildStreamStatusBadge() {
-    final isRealFb = SensorStreamService.instance.isReceivingRealFirebase;
-    final isStreaming = _isConnected && _devicePower;
+    final Color badgeColor;
+    switch (_status) {
+      case LiveStatus.live:
+        badgeColor = const Color(0xff00D9A6);
+        break;
+      case LiveStatus.demo:
+        badgeColor = Colors.purpleAccent;
+        break;
+      case LiveStatus.sensorStale:
+      case LiveStatus.sensorError:
+        badgeColor = Colors.orangeAccent;
+        break;
+      case LiveStatus.offline:
+        badgeColor = Colors.amber;
+        break;
+      case LiveStatus.noData:
+        badgeColor = Colors.white38;
+        break;
+    }
 
     return GestureDetector(
       onTap: _showStreamInfoModal,
@@ -656,59 +689,48 @@ class _HomeScreenState extends State<HomeScreen> {
           color: const Color(0xff10233F),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: isStreaming
-                ? (isRealFb ? const Color(0xff00D9A6) : Colors.amber.withValues(alpha: 0.6))
-                : Colors.white12,
-            width: 1,
+            color: _status.deviceReachable
+                ? badgeColor.withValues(alpha: 0.6)
+                : Colors.white.withValues(alpha: 0.1),
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: isStreaming
-                    ? (isRealFb ? const Color(0xff00D9A6) : Colors.amber)
-                    : Colors.white38,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                isStreaming
-                    ? 'Stream: ${_device.streamSource}'
-                    : 'Stream: Sensor Offline (Hubungkan & Aktifkan Meter)',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: badgeColor,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: badgeColor.withValues(alpha: 0.6),
+                        blurRadius: 4,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
                 ),
-                overflow: TextOverflow.ellipsis,
-              ),
+                const SizedBox(width: 8),
+                Text(
+                  _status.badge,
+                  style: TextStyle(
+                    color: badgeColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.tune_rounded, color: Colors.white70, size: 13),
-                  SizedBox(width: 4),
-                  Text('Info', style: TextStyle(color: Colors.white70, fontSize: 11)),
-                ],
+            Flexible(
+              child: Text(
+                SensorStreamService.instance.sourceLabel,
+                style: const TextStyle(color: Colors.white54, fontSize: 11),
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
               ),
             ),
           ],
@@ -719,18 +741,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = !Responsive.isMobile(context);
-
     return Scaffold(
       backgroundColor: const Color(0xff071426),
-      bottomNavigationBar: widget.isInsideShell ? null : _buildBottomNav(),
       body: SafeArea(
-        child: ResponsiveContainer(
-          maxWidth: 1050,
-          padding: EdgeInsets.symmetric(horizontal: isWide ? 24 : 14, vertical: isWide ? 20 : 12),
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: isWide ? _buildTabletLayout() : _buildMobileLayout(),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 840),
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  if (constraints.maxWidth >= 600) {
+                    return _buildTabletLayout();
+                  }
+                  return _buildMobileLayout();
+                },
+              ),
+            ),
           ),
         ),
       ),
@@ -747,10 +775,15 @@ class _HomeScreenState extends State<HomeScreen> {
         const HomeHeader(),
         const SizedBox(height: 14),
 
-        // Device Status Card dengan tombol "Hubungkan Perangkat"
+        // Device Status Card dengan switch relay & status telemetri nyata
         DeviceStatusCard(
           connected: _isConnected,
-          power: _devicePower,
+          reachable: _status.deviceReachable,
+          relayOn: _latestReading?.relayOutputState ?? false,
+          relayPending: _relayPending,
+          canControl: _isConnected && _status.deviceReachable && !kDemoMode,
+          statusLabel: _status.badge,
+          relayNote: _relayPending ? 'Menunggu konfirmasi perangkat...' : null,
           deviceId: DeviceService.deviceIdNotifier.value,
           onChanged: togglePower,
           onConnect: _openConnectSheet,
@@ -772,7 +805,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         const SizedBox(height: 14),
 
-        // ENLARGED MONITORING CARD (Mengenali state isConnected, isPowerOn, Hz, PF, & Batas MCB)
+        // ENLARGED MONITORING CARD
         MonitoringCard(
           voltage: _device.voltage,
           power: _device.power,
@@ -782,45 +815,43 @@ class _HomeScreenState extends State<HomeScreen> {
           powerLimitVa: _device.powerLimitVa,
           onConfigureLimit: _openPowerLimitPicker,
           isConnected: _isConnected,
-          isPowerOn: _devicePower,
-          isSensorValid: _device.isSensorValid,
-          isSensorStale: _device.isSensorStale,
+          status: _status,
         ),
         const SizedBox(height: 18),
 
-        // SUMMARY HARIAN (Kalkulasi dinamis berdasarkan kWh x Tarif)
+        // SUMMARY HARIAN
         EnergySummaryCard(
           titleLeft: 'Total Pemakaian Hari Ini',
-          valueLeft: _isConnected ? '${_device.dailyEnergy.toStringAsFixed(2)} kWh' : '0 kWh',
+          valueLeft: _isConnected && _status.showsMeasurements
+              ? '${_device.dailyEnergy.toStringAsFixed(2)} kWh'
+              : '-- kWh',
           titleRight: 'Total Biaya Hari Ini',
-          valueRight: _isConnected ? _currencyFormatter.format(_device.dailyCost) : 'Rp 0',
-          badgeLeft: _isConnected
-              ? (_devicePower ? '↓ 12% hemat' : 'Meter Standby')
-              : 'Belum terhubung',
-          badgeRight: _isConnected
-              ? (_devicePower ? 'Sesuai estimasi' : 'Data tersimpan')
-              : 'Belum ada data',
+          valueRight: _isConnected && _status.showsMeasurements
+              ? _currencyFormatter.format(_device.dailyCost)
+              : 'Rp --',
+          badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
+          badgeRight: _isConnected ? 'Tarif Rp ${DeviceService.currentTariff.toInt()}/kWh' : 'Belum ada data',
         ),
         const SizedBox(height: 14),
 
         DailyEnergyChart(
-          data: _isConnected ? _device.dailyHistory : const [],
+          data: _isConnected && _status.showsMeasurements ? _device.dailyHistory : const [],
           isConnected: _isConnected,
         ),
         const SizedBox(height: 18),
 
-        // SUMMARY BULANAN (Kalkulasi dinamis berdasarkan kWh x Tarif)
+        // SUMMARY BULANAN
         EnergySummaryCard(
           titleLeft: 'Total Pemakaian Bulan Ini',
-          valueLeft: _isConnected ? '${_device.monthlyEnergy.toStringAsFixed(1)} kWh' : '0 kWh',
+          valueLeft: _isConnected && _status.showsMeasurements
+              ? '${_device.monthlyEnergy.toStringAsFixed(1)} kWh'
+              : '-- kWh',
           titleRight: 'Total Biaya Bulan Ini',
-          valueRight: _isConnected ? _currencyFormatter.format(_device.monthlyCost) : 'Rp 0',
-          badgeLeft: _isConnected
-              ? (_devicePower ? 'Stabil' : 'OFF (Standby)')
-              : 'Belum terhubung',
-          badgeRight: _isConnected
-              ? (_devicePower ? 'Sesuai estimasi' : 'Data tersimpan')
-              : 'Belum ada data',
+          valueRight: _isConnected && _status.showsMeasurements
+              ? _currencyFormatter.format(_device.monthlyCost)
+              : 'Rp --',
+          badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
+          badgeRight: _isConnected ? 'Target Anggaran' : 'Belum ada data',
         ),
         const SizedBox(height: 14),
 
@@ -850,7 +881,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   DeviceStatusCard(
                     connected: _isConnected,
-                    power: _devicePower,
+                    reachable: _status.deviceReachable,
+                    relayOn: _latestReading?.relayOutputState ?? false,
+                    relayPending: _relayPending,
+                    canControl: _isConnected && _status.deviceReachable && !kDemoMode,
+                    statusLabel: _status.badge,
+                    relayNote: _relayPending ? 'Menunggu konfirmasi perangkat...' : null,
                     deviceId: DeviceService.deviceIdNotifier.value,
                     onChanged: togglePower,
                     onConnect: _openConnectSheet,
@@ -880,51 +916,49 @@ class _HomeScreenState extends State<HomeScreen> {
                     powerLimitVa: _device.powerLimitVa,
                     onConfigureLimit: _openPowerLimitPicker,
                     isConnected: _isConnected,
-                    isPowerOn: _devicePower,
-                    isSensorValid: _device.isSensorValid,
-                    isSensorStale: _device.isSensorStale,
+                    status: _status,
                   ),
                 ],
               ),
             ),
             const SizedBox(width: 20),
 
-            // Right Column: Energy Charts & Analytics
+            // Right Column: Summary & Analytics Charts
             Expanded(
-              flex: 5,
+              flex: 7,
               child: Column(
                 children: [
                   EnergySummaryCard(
                     titleLeft: 'Total Pemakaian Hari Ini',
-                    valueLeft: _isConnected ? '${_device.dailyEnergy.toStringAsFixed(2)} kWh' : '0 kWh',
+                    valueLeft: _isConnected && _status.showsMeasurements
+                        ? '${_device.dailyEnergy.toStringAsFixed(2)} kWh'
+                        : '-- kWh',
                     titleRight: 'Total Biaya Hari Ini',
-                    valueRight: _isConnected ? _currencyFormatter.format(_device.dailyCost) : 'Rp 0',
-                    badgeLeft: _isConnected
-                        ? (_devicePower ? '↓ 12% hemat' : 'Meter Standby')
-                        : 'Belum terhubung',
-                    badgeRight: _isConnected
-                        ? (_devicePower ? 'Sesuai estimasi' : 'Data tersimpan')
-                        : 'Belum ada data',
+                    valueRight: _isConnected && _status.showsMeasurements
+                        ? _currencyFormatter.format(_device.dailyCost)
+                        : 'Rp --',
+                    badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
+                    badgeRight: _isConnected ? 'Tarif Rp ${DeviceService.currentTariff.toInt()}/kWh' : 'Belum ada data',
                   ),
                   const SizedBox(height: 16),
 
                   DailyEnergyChart(
-                    data: _isConnected ? _device.dailyHistory : const [],
+                    data: _isConnected && _status.showsMeasurements ? _device.dailyHistory : const [],
                     isConnected: _isConnected,
                   ),
                   const SizedBox(height: 16),
 
                   EnergySummaryCard(
                     titleLeft: 'Total Pemakaian Bulan Ini',
-                    valueLeft: _isConnected ? '${_device.monthlyEnergy.toStringAsFixed(1)} kWh' : '0 kWh',
+                    valueLeft: _isConnected && _status.showsMeasurements
+                        ? '${_device.monthlyEnergy.toStringAsFixed(1)} kWh'
+                        : '-- kWh',
                     titleRight: 'Total Biaya Bulan Ini',
-                    valueRight: _isConnected ? _currencyFormatter.format(_device.monthlyCost) : 'Rp 0',
-                    badgeLeft: _isConnected
-                        ? (_devicePower ? 'Stabil' : 'OFF (Standby)')
-                        : 'Belum terhubung',
-                    badgeRight: _isConnected
-                        ? (_devicePower ? 'Sesuai estimasi' : 'Data tersimpan')
-                        : 'Belum ada data',
+                    valueRight: _isConnected && _status.showsMeasurements
+                        ? _currencyFormatter.format(_device.monthlyCost)
+                        : 'Rp --',
+                    badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
+                    badgeRight: _isConnected ? 'Target Anggaran' : 'Belum ada data',
                   ),
                   const SizedBox(height: 16),
 
@@ -936,46 +970,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         const SizedBox(height: 24),
       ],
-    );
-  }
-
-  Widget _buildBottomNav() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xff071426),
-        border: Border(top: BorderSide(color: Color(0xff00D9A6), width: 1.0)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Container(
-          height: 60,
-          padding: const EdgeInsets.symmetric(horizontal: 30),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              // Home Icon (Active)
-              IconButton(
-                icon: const Icon(Icons.home_rounded, color: Color(0xffffc400), size: 28),
-                onPressed: () {},
-              ),
-              // Energy Icon
-              IconButton(
-                icon: const Icon(Icons.bolt_rounded, color: Colors.white54, size: 28),
-                onPressed: () {
-                  if (widget.onNavigateToTab != null) {
-                    widget.onNavigateToTab!(1);
-                  } else {
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(builder: (context) => const EnergyScreen()),
-                    );
-                  }
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

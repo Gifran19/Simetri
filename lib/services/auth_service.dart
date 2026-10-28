@@ -195,13 +195,11 @@ class AuthService {
   /// 4. Memanggil Firebase signOut.
   Future<void> signOut() async {
     try {
-      // 1. Hentikan listener perangkat IoT & timer simulasi
+      // 1. Hentikan listener perangkat IoT
       SensorStreamService.instance.stopStreaming();
-      SensorStreamService.instance.pauseStreamingToZero();
 
       // 2. Bersihkan status koneksi lokal pengguna
       await DeviceService.saveConnectionState(false);
-      await DeviceService.saveDevicePower(false);
 
       // 3. Logout dari sesi Firebase jika tersedia
       final auth = _auth;

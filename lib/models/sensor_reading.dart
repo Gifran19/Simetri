@@ -44,7 +44,8 @@ class SensorReading {
     this.sensorError,
   });
 
-  /// Buat objek pembacaan sensor dalam kondisi offline/mati
+  /// Placeholder kosong (belum ada data). Semua nilai nol dan ditandai tidak valid;
+  /// timestamp epoch 0 sehingga selalu dievaluasi sebagai usang/offline.
   factory SensorReading.zero() {
     return SensorReading(
       voltage: 0.0,
@@ -52,15 +53,15 @@ class SensorReading {
       power: 0.0,
       frequency: 0.0,
       powerFactor: 0.0,
-      energyKwh: 42.5,
-      dailyEnergyKwh: 42.5,
-      monthlyEnergyKwh: 125.0,
+      energyKwh: 0.0,
+      dailyEnergyKwh: 0.0,
+      monthlyEnergyKwh: 0.0,
       relayState: false,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.fromMillisecondsSinceEpoch(0),
       isFromFirebase: false,
       isValid: false,
       isStale: true,
-      sensorError: 'Perangkat offline',
+      sensorError: 'Belum ada data dari perangkat',
     );
   }
 
@@ -86,18 +87,25 @@ class SensorReading {
       return fallback;
     }
 
+    // Timestamp yang hilang/tidak terbaca TIDAK boleh dianggap "sekarang"
+    // (itu akan membuat data tak bertanda waktu tampak segar). Gunakan epoch 0
+    // agar dievaluasi sebagai usang/offline.
+    final DateTime unknownTime = DateTime.fromMillisecondsSinceEpoch(0);
     DateTime parseTime(dynamic val) {
-      if (val == null) return DateTime.now();
+      if (val == null) return unknownTime;
       if (val is int) {
         if (val < 10000000000) {
           return DateTime.fromMillisecondsSinceEpoch(val * 1000);
         }
         return DateTime.fromMillisecondsSinceEpoch(val);
       }
-      if (val is String) {
-        return DateTime.tryParse(val) ?? DateTime.now();
+      if (val is double) {
+        return DateTime.fromMillisecondsSinceEpoch(val.toInt());
       }
-      return DateTime.now();
+      if (val is String) {
+        return DateTime.tryParse(val) ?? unknownTime;
+      }
+      return unknownTime;
     }
 
     // Deteksi validitas sensor eksplisit dari payload firmware
@@ -120,8 +128,8 @@ class SensorReading {
       voltage: rawVoltage ?? 0.0,
       current: parseDouble(map['current'] ?? map['c'] ?? map['i'] ?? map['arus'], 0.0),
       power: rawPower ?? 0.0,
-      frequency: parseDouble(map['frequency'] ?? map['f'] ?? map['frekuensi'], 50.0),
-      powerFactor: parseDouble(map['power_factor'] ?? map['pf'] ?? map['cosphi'], 0.98),
+      frequency: parseDouble(map['frequency'] ?? map['f'] ?? map['frekuensi'], 0.0),
+      powerFactor: parseDouble(map['power_factor'] ?? map['pf'] ?? map['cosphi'], 0.0),
       energyKwh: parseDouble(map['energy_kwh'] ?? map['energy'] ?? map['kwh'], 0.0),
       dailyEnergyKwh: parseDouble(map['daily_energy'] ?? map['daily_kwh'] ?? map['harian'], 0.0),
       monthlyEnergyKwh: parseDouble(map['monthly_energy'] ?? map['monthly_kwh'] ?? map['bulanan'], 0.0),

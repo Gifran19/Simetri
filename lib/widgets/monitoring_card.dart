@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../services/live_status.dart';
+
 class MonitoringCard extends StatefulWidget {
   final double voltage;
   final double power;
@@ -11,9 +13,9 @@ class MonitoringCard extends StatefulWidget {
   final int powerLimitVa;
   final VoidCallback? onConfigureLimit;
   final bool isConnected;
-  final bool isPowerOn;
-  final bool isSensorValid;
-  final bool isSensorStale;
+
+  /// Status data aktual dari perangkat (live / offline / stale / error / belum ada data / DEMO).
+  final LiveStatus status;
 
   const MonitoringCard({
     super.key,
@@ -25,9 +27,7 @@ class MonitoringCard extends StatefulWidget {
     this.powerLimitVa = 1300,
     this.onConfigureLimit,
     this.isConnected = true,
-    this.isPowerOn = true,
-    this.isSensorValid = true,
-    this.isSensorStale = false,
+    this.status = LiveStatus.noData,
   });
 
   @override
@@ -39,6 +39,33 @@ class _MonitoringCardState extends State<MonitoringCard> {
   int _viewMode = 0;
   // Selected metric for Hero Detail: 0 = Voltage, 1 = Power, 2 = Current
   int _selectedMetric = 0;
+
+  /// true jika angka pengukuran boleh ditampilkan (data nyata segar atau DEMO eksplisit).
+  bool get _showsValues => widget.isConnected && widget.status.showsMeasurements;
+
+  Color get _statusColor {
+    if (!widget.isConnected) return Colors.grey.shade600;
+    switch (widget.status) {
+      case LiveStatus.live:
+        return const Color(0xff00D9A6);
+      case LiveStatus.demo:
+        return Colors.purpleAccent;
+      case LiveStatus.sensorStale:
+        return Colors.amber;
+      case LiveStatus.sensorError:
+        return Colors.redAccent;
+      case LiveStatus.offline:
+        return Colors.orangeAccent;
+      case LiveStatus.noData:
+        return Colors.white38;
+    }
+  }
+
+  /// Penjelasan singkat saat nilai tidak ditampilkan.
+  String get _noValueNote {
+    if (!widget.isConnected) return 'Perangkat belum terhubung • Tidak ada data sensor';
+    return '${widget.status.description} Nilai tidak ditampilkan.';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,14 +98,12 @@ class _MonitoringCardState extends State<MonitoringCard> {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: widget.isConnected
-                            ? (widget.isPowerOn ? const Color(0xff00D9A6) : Colors.orangeAccent)
-                            : Colors.grey.shade600,
+                        color: _statusColor,
                         shape: BoxShape.circle,
-                        boxShadow: widget.isConnected && widget.isPowerOn
+                        boxShadow: _showsValues
                             ? [
-                                const BoxShadow(
-                                  color: Color(0xff00D9A6),
+                                BoxShadow(
+                                  color: _statusColor,
                                   blurRadius: 6,
                                   spreadRadius: 1,
                                 ),
@@ -102,23 +127,13 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     const SizedBox(width: 6),
                     Builder(
                       builder: (context) {
-                        Color badgeColor;
+                        Color badgeColor = _statusColor;
                         String badgeText;
                         if (!widget.isConnected) {
                           badgeColor = Colors.white38;
-                          badgeText = 'OFFLINE';
-                        } else if (!widget.isPowerOn) {
-                          badgeColor = Colors.orangeAccent;
-                          badgeText = 'MATI (OFF)';
-                        } else if (!widget.isSensorValid) {
-                          badgeColor = Colors.redAccent;
-                          badgeText = 'SENSOR ERROR';
-                        } else if (widget.isSensorStale) {
-                          badgeColor = Colors.amber;
-                          badgeText = 'SENSOR STALE';
+                          badgeText = 'BELUM TERHUBUNG';
                         } else {
-                          badgeColor = const Color(0xff00D9A6);
-                          badgeText = 'LIVE';
+                          badgeText = widget.status.badge;
                         }
 
                         return Container(
@@ -197,21 +212,21 @@ class _MonitoringCardState extends State<MonitoringCard> {
   }
 
   Widget _buildMcbCapacityBar() {
-    final isLive = widget.isConnected && widget.isPowerOn;
+    final isLive = _showsValues;
     final powerValue = isLive ? widget.power : 0.0;
     final limitVa = widget.powerLimitVa > 0 ? widget.powerLimitVa : 1300;
     final double percent = (powerValue / limitVa) * 100;
     final double clampedFraction = (percent / 100).clamp(0.0, 1.0);
 
-    Color statusColor = const Color(0xff00D9A6);
-    String statusText = 'Beban Listrik Aman';
-    IconData statusIcon = Icons.shield_rounded;
+    Color statusColor = isLive ? const Color(0xff00D9A6) : Colors.white38;
+    String statusText = isLive ? 'Beban Listrik Aman' : 'Tidak ada data beban';
+    IconData statusIcon = isLive ? Icons.shield_rounded : Icons.help_outline_rounded;
 
-    if (percent >= 95) {
+    if (isLive && percent >= 95) {
       statusColor = Colors.redAccent;
       statusText = 'BAHAYA OVERLOAD! Risiko MCB PLN Trip';
       statusIcon = Icons.warning_rounded;
-    } else if (percent >= 80) {
+    } else if (isLive && percent >= 80) {
       statusColor = Colors.orangeAccent;
       statusText = 'WASPADA: Beban Mendekati Batas MCB';
       statusIcon = Icons.error_outline_rounded;
@@ -317,7 +332,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
         final itemWidth = (availableWidth - 16) / 3;
         final circleDiameter = (itemWidth - 6).clamp(86.0, 130.0);
 
-        final isReadingOk = widget.isConnected && widget.isPowerOn && widget.isSensorValid;
+        final isReadingOk = _showsValues;
 
         return Column(
           children: [
@@ -337,7 +352,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                       value: isReadingOk ? widget.voltage / 250 : 0.0,
                       valueText: isReadingOk
                           ? '${widget.voltage.toInt()}'
-                          : (widget.isConnected && widget.isPowerOn ? '--' : (widget.isConnected ? '0' : '--')),
+                          : '--',
                       unitText: 'V',
                       title: 'Tegangan',
                       subtitle: 'Volt (V)',
@@ -365,7 +380,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                       value: isReadingOk ? widget.power / 100 : 0.0,
                       valueText: isReadingOk
                           ? widget.power.toStringAsFixed(1)
-                          : (widget.isConnected && widget.isPowerOn ? '--' : (widget.isConnected ? '0.0' : '--')),
+                          : '--',
                       unitText: 'W',
                       title: 'Daya',
                       subtitle: 'Watt (W)',
@@ -393,7 +408,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                       value: isReadingOk ? widget.current / 5 : 0.0,
                       valueText: isReadingOk
                           ? widget.current.toStringAsFixed(1)
-                          : (widget.isConnected && widget.isPowerOn ? '--' : (widget.isConnected ? '0.0' : '--')),
+                          : '--',
                       unitText: 'A',
                       title: 'Arus',
                       subtitle: 'Ampere (A)',
@@ -415,20 +430,20 @@ class _MonitoringCardState extends State<MonitoringCard> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  widget.isConnected
-                      ? (widget.isPowerOn ? Icons.touch_app_rounded : Icons.power_settings_new_rounded)
-                      : Icons.info_outline_rounded,
+                  _showsValues ? Icons.touch_app_rounded : Icons.info_outline_rounded,
                   size: 13,
                   color: Colors.white.withValues(alpha: 0.35),
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  widget.isConnected
-                      ? (widget.isPowerOn
-                          ? 'Ketuk lingkaran untuk memperbesar detail'
-                          : 'Smart Meter nonaktif (OFF) • Nyalakan saklar untuk membaca sensor')
-                      : 'Perangkat belum terhubung • Data sensor offline',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 10),
+                Flexible(
+                  child: Text(
+                    _showsValues
+                        ? (widget.status == LiveStatus.demo
+                            ? 'DEMO • Data simulasi, bukan dari perangkat'
+                            : 'Ketuk lingkaran untuk memperbesar detail')
+                        : _noValueNote,
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 10),
+                  ),
                 ),
               ],
             ),
@@ -451,60 +466,42 @@ class _MonitoringCardState extends State<MonitoringCard> {
     late String statusNote;
     late IconData icon;
 
-    final isLive = widget.isConnected && widget.isPowerOn && widget.isSensorValid;
-    final isSensorError = widget.isConnected && widget.isPowerOn && !widget.isSensorValid;
+    final isLive = _showsValues;
+    // Keterangan netral: hanya menyatakan status data, tanpa klaim
+    // ("normal", "efisien", "aman") yang tidak diukur oleh aplikasi.
+    final String note = !widget.isConnected
+        ? 'Perangkat belum terhubung • Tidak ada data sensor'
+        : (widget.status == LiveStatus.demo
+            ? 'DEMO • Data simulasi, bukan dari perangkat'
+            : (isLive ? 'Data nyata dari perangkat' : widget.status.description));
 
     switch (_selectedMetric) {
       case 0:
         title = 'Tegangan Listrik';
-        valueText = isLive
-            ? '${widget.voltage.toInt()}'
-            : (isSensorError ? '--' : (widget.isConnected ? '0' : '--'));
+        valueText = isLive ? '${widget.voltage.toInt()}' : '--';
         unit = 'Volt';
         progress = isLive ? (widget.voltage / 250).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00FFA3), Color(0xff00D9A6), Color(0xff00A896)];
-        statusNote = isSensorError
-            ? 'Sensor Error / Stale • Tidak ada pembacaan tegangan valid'
-            : (widget.isConnected
-                ? (widget.isPowerOn
-                    ? 'Tegangan Stabil • 220V Normal PLN'
-                    : 'Smart Meter Dimatikan (Standby) • Sensor Tidak Mengirim Data')
-                : 'Perangkat Belum Terhubung • Sensor Offline');
+        statusNote = note;
         icon = Icons.bolt_rounded;
         break;
       case 1:
         title = 'Daya Aktif';
-        valueText = isLive
-            ? widget.power.toStringAsFixed(1)
-            : (isSensorError ? '--' : (widget.isConnected ? '0.0' : '--'));
+        valueText = isLive ? widget.power.toStringAsFixed(1) : '--';
         unit = 'Watt';
         progress = isLive ? (widget.power / 100).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00D2FF), Color(0xff008CFF), Color(0xff0052D4)];
-        statusNote = isSensorError
-            ? 'Sensor Error / Stale • Tidak ada pembacaan daya valid'
-            : (widget.isConnected
-                ? (widget.isPowerOn
-                    ? 'Beban Rendah • Penggunaan Efisien'
-                    : 'Smart Meter Dimatikan • Monitoring Daya Nonaktif')
-                : 'Perangkat Belum Terhubung • Sensor Offline');
+        statusNote = note;
         icon = Icons.power_rounded;
         break;
       case 2:
       default:
         title = 'Kuat Arus';
-        valueText = isLive
-            ? widget.current.toStringAsFixed(1)
-            : (isSensorError ? '--' : (widget.isConnected ? '0.0' : '--'));
+        valueText = isLive ? widget.current.toStringAsFixed(1) : '--';
         unit = 'Ampere';
         progress = isLive ? (widget.current / 5).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xffF9D423), Color(0xffB7FF00), Color(0xff70E000)];
-        statusNote = isSensorError
-            ? 'Sensor Error / Stale • Tidak ada pembacaan arus valid'
-            : (widget.isConnected
-                ? (widget.isPowerOn
-                    ? 'Arus Normal • Aman dari lonjakan'
-                    : 'Smart Meter Dimatikan • Monitoring Arus Nonaktif')
-                : 'Perangkat Belum Terhubung • Sensor Offline');
+        statusNote = note;
         icon = Icons.waves_rounded;
         break;
     }

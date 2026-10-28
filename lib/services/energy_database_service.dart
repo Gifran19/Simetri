@@ -6,6 +6,7 @@ import 'package:firebase_database/firebase_database.dart';
 import '../firebase_options.dart';
 import '../models/yearly_energy_data.dart';
 import 'device_service.dart';
+import 'live_status.dart';
 
 /// Service untuk mengambil dan menyimpan data energi ke Firebase Realtime Database.
 ///
@@ -56,6 +57,22 @@ class EnergyDatabaseService {
     }
   }
 
+  /// Galat terakhir saat membaca histori energi (mis. izin ditolak / timeout),
+  /// atau null jika pembacaan terakhir tidak menimbulkan galat.
+  String? lastFetchError;
+
+  /// Hasil kosong untuk mode nyata. Data contoh HANYA dikembalikan bila mode DEMO
+  /// dipilih eksplisit (SIMETRI_DEMO_MODE=true) dan UI wajib melabelinya DEMO.
+  YearlyEnergyData _emptyOrDemo(int year) {
+    return kDemoMode ? YearlyEnergyData.dummy(year) : YearlyEnergyData.empty(year);
+  }
+
+  /// Daftar tahun bawaan bila database belum memiliki histori: hanya tahun berjalan
+  /// (bukan daftar tahun contoh), kecuali mode DEMO.
+  List<int> _defaultYears() {
+    return kDemoMode ? [2026, 2025, 2024] : [DateTime.now().year];
+  }
+
   // Helper internal untuk mendapatkan deviceId aktif
   Future<String> _resolveDeviceId([String? deviceId]) async {
     if (deviceId != null && deviceId.trim().isNotEmpty) {
@@ -70,7 +87,7 @@ class EnergyDatabaseService {
   Future<List<int>> fetchAvailableYears([String? deviceId]) async {
     final db = _db;
     if (db == null) {
-      return [2026, 2025, 2024];
+      return _defaultYears();
     }
 
     try {
@@ -81,22 +98,22 @@ class EnergyDatabaseService {
           .timeout(const Duration(seconds: 2));
 
       if (!snapshot.exists || snapshot.value == null) {
-        return [2026, 2025, 2024];
+        return _defaultYears();
       }
 
       final raw = snapshot.value;
       if (raw is List) {
         final list = raw.whereType<num>().map((e) => e.toInt()).toList()
           ..sort((a, b) => b.compareTo(a)); // descending
-        return list.isNotEmpty ? list : [2026, 2025, 2024];
+        return list.isNotEmpty ? list : _defaultYears();
       } else if (raw is Map) {
         final list = raw.values.whereType<num>().map((e) => e.toInt()).toList()
           ..sort((a, b) => b.compareTo(a));
-        return list.isNotEmpty ? list : [2026, 2025, 2024];
+        return list.isNotEmpty ? list : _defaultYears();
       }
-      return [2026, 2025, 2024];
+      return _defaultYears();
     } catch (e) {
-      return [2026, 2025, 2024];
+      return _defaultYears();
     }
   }
 
@@ -106,7 +123,7 @@ class EnergyDatabaseService {
   Future<YearlyEnergyData> fetchYearlyData(int year, [String? deviceId]) async {
     final db = _db;
     if (db == null) {
-      return YearlyEnergyData.dummy(year);
+      return _emptyOrDemo(year);
     }
 
     try {
@@ -115,9 +132,10 @@ class EnergyDatabaseService {
           .ref('energy_data/$devId/$year')
           .get()
           .timeout(const Duration(seconds: 2));
+      lastFetchError = null;
 
       if (!snapshot.exists || snapshot.value == null) {
-        return YearlyEnergyData.dummy(year);
+        return _emptyOrDemo(year);
       }
 
       final data = snapshot.value as Map<dynamic, dynamic>;
@@ -141,7 +159,8 @@ class EnergyDatabaseService {
 
       return YearlyEnergyData.fromFirebase(year: year, data: data, prevData: prevData);
     } catch (e) {
-      return YearlyEnergyData.dummy(year);
+      lastFetchError = 'Gagal membaca histori energi: $e';
+      return _emptyOrDemo(year);
     }
   }
 
@@ -151,7 +170,7 @@ class EnergyDatabaseService {
   Stream<YearlyEnergyData> streamYearlyData(int year, [String? deviceId]) async* {
     final db = _db;
     if (db == null) {
-      yield YearlyEnergyData.dummy(year);
+      yield _emptyOrDemo(year);
       return;
     }
 
@@ -159,7 +178,7 @@ class EnergyDatabaseService {
 
     yield* db.ref('energy_data/$devId/$year').onValue.asyncMap((event) async {
       if (!event.snapshot.exists || event.snapshot.value == null) {
-        return YearlyEnergyData.dummy(year);
+        return _emptyOrDemo(year);
       }
       final data = event.snapshot.value as Map<dynamic, dynamic>;
 

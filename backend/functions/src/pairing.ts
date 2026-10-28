@@ -164,20 +164,35 @@ export async function handleClaimDevice(
     }
 
     // 6c. Pulihkan jika belum lengkap (misal akibat crash jaringan sebelum permissions tersimpan)
-    if (!permSnap.exists() || currentMeta.ownerUid !== callerUid) {
-      const recoveryUpdates: Record<string, unknown> = {};
-      recoveryUpdates[`permissions/${callerUid}/${deviceId}`] = {
-        role: 'owner',
-        status: 'active',
-        grantedAt: secretData.usedAt || now,
-      };
-      recoveryUpdates[`devices/${deviceId}/meta/ownerUid`] = callerUid;
-      recoveryUpdates[`devices/${deviceId}/meta/claimedAt`] = secretData.usedAt || now;
-      await db.ref().update(recoveryUpdates);
+    // PERBAIKAN: Gunakan transaksi atomik pada permission agar TIDAK menimpa status revoked
+    if (!permSnap.exists()) {
+      const permRef = db.ref(`permissions/${callerUid}/${deviceId}`);
+      await permRef.transaction((currentPerm) => {
+        if (currentPerm !== null) {
+          return; // Jangan timpa jika status sudah ada (misal diubah bersamaan)
+        }
+        return {
+          role: 'owner',
+          status: 'active',
+          grantedAt: secretData.usedAt || now,
+        };
+      });
+      if (currentMeta.ownerUid !== callerUid) {
+        await db.ref(`devices/${deviceId}/meta`).update({
+          ownerUid: callerUid,
+          claimedAt: secretData.usedAt || now,
+        });
+      }
     }
 
     // 6d. VERIFIKASI: Konfirmasi permission aktif benar-benar tersedia sebelum laporkan sukses.
     const verifyRecoverySnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
+    if (verifyRecoverySnap.exists() && verifyRecoverySnap.val()?.status === 'revoked') {
+      throw new HttpsError(
+        'failed-precondition',
+        'Izin akses untuk perangkat ini telah dicabut oleh administrator.'
+      );
+    }
     if (!verifyRecoverySnap.exists() || verifyRecoverySnap.val()?.status !== 'active') {
       throw new HttpsError(
         'internal',
@@ -287,27 +302,75 @@ export async function handleClaimDevice(
         // Permintaan paralel dari UID yang sama baru saja menyelesaikan klaim dengan sukses.
         // Tunggu sejenak jika operasi paralel sedang dalam proses menyimpan permissions.
         let verifyParallelSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
-        if (!verifyParallelSnap.exists() || verifyParallelSnap.val()?.status !== 'active') {
+        if (!verifyParallelSnap.exists()) {
           for (let i = 0; i < 6; i++) {
             await new Promise((resolve) => setTimeout(resolve, 50));
             verifyParallelSnap = await db.ref(`permissions/${callerUid}/${deviceId}`).get();
-            if (verifyParallelSnap.exists() && verifyParallelSnap.val()?.status === 'active') {
+            if (verifyParallelSnap.exists()) {
               break;
             }
           }
         }
 
-        // Jika operasi paralel belum sempat menyimpan permission, simpan secara idempoten
-        // karena hak kepemilikan secret sudah terbukti sah untuk callerUid ini.
-        if (!verifyParallelSnap.exists() || verifyParallelSnap.val()?.status !== 'active') {
-          const fallbackUpdates: Record<string, unknown> = {};
-          fallbackUpdates[`permissions/${callerUid}/${deviceId}`] = {
-            role: 'owner',
-            status: 'active',
-            grantedAt: currentSecretVal.usedAt || now,
-          };
-          fallbackUpdates[`pairing_rate_limits/${callerUid}`] = null;
-          await db.ref().update(fallbackUpdates);
+        // PENTING: Bedakan izin yang belum tersedia dari izin yang sudah dicabut!
+        if (verifyParallelSnap.exists()) {
+          const permStatus = verifyParallelSnap.val()?.status;
+          if (permStatus === 'revoked') {
+            throw new HttpsError(
+              'failed-precondition',
+              'Izin akses untuk perangkat ini telah dicabut oleh administrator.'
+            );
+          }
+          if (permStatus !== 'active') {
+            throw new HttpsError(
+              'failed-precondition',
+              'Status izin perangkat tidak aktif.'
+            );
+          }
+        } else {
+          // Permission memang BELUM TERSEDIA (in-flight parallel request belum menulisnya atau terjadi kegagalan jaringan).
+          // Konsistensi: Verifikasi kepemilikan perangkat sebelum melakukan pemulihan fallback
+          const metaSnap = await db.ref(`devices/${deviceId}/meta`).get();
+          const currentMeta = (metaSnap.val() || {}) as DeviceMetaData;
+          if (currentMeta.ownerUid && currentMeta.ownerUid !== callerUid) {
+            throw new HttpsError(
+              'failed-precondition',
+              'Perangkat ini telah dipindahtangankan ke pemilik baru.'
+            );
+          }
+
+          // Gunakan transaksi atomik pada node permission agar TIDAK menimpa jika izin baru saja
+          // dicabut oleh operasi admin bersamaan (concurrent revocation).
+          const permRef = db.ref(`permissions/${callerUid}/${deviceId}`);
+          await permRef.transaction((currentPerm) => {
+            if (currentPerm !== null) {
+              // Jika sudah ada status (termasuk revoked atau ditulis paralel), JANGAN timpa!
+              return;
+            }
+            return {
+              role: 'owner',
+              status: 'active',
+              grantedAt: currentSecretVal.usedAt || now,
+            };
+          });
+
+          // Evaluasi hasil akhir permission setelah transaksi
+          const finalPermSnap = await permRef.get();
+          if (!finalPermSnap.exists() || finalPermSnap.val()?.status !== 'active') {
+            if (finalPermSnap.exists() && finalPermSnap.val()?.status === 'revoked') {
+              throw new HttpsError(
+                'failed-precondition',
+                'Izin akses untuk perangkat ini telah dicabut oleh administrator.'
+              );
+            }
+            throw new HttpsError(
+              'internal',
+              'Pemulihan gagal: izin akses tidak dapat dikonfirmasi. Silakan coba lagi.'
+            );
+          }
+
+          // Reset rate limits jika berhasil
+          await db.ref(`pairing_rate_limits/${callerUid}`).remove();
         }
 
         return {

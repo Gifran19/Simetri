@@ -572,4 +572,54 @@ describe('SIMETRI Production-Grade Pairing & Security Verification Suite', () =>
       }
     );
   });
+
+  it('11. Fallback permission pada permintaan paralel TIDAK BOLEH menimpa status revoked menjadi active', async () => {
+    const revokedUserUid = 'user_parallel_revoked_check';
+    const revokedDevice = 'DEV_REVOKED_PARALLEL_01';
+    const revokedCode = 'REVOKED_PARALLEL_CD';
+
+    // 1. Setup secret yang sudah diklaim oleh user ini (simulasi permintaan pertama berhasil klaim secret)
+    const hash = crypto.createHash('sha256').update(revokedCode.trim().toUpperCase()).digest('hex');
+    const now = Date.now();
+    await db.ref(`pairing_secrets/${hash}`).set({
+      deviceId: revokedDevice,
+      codeHash: hash,
+      createdAt: now - 1000,
+      expiresAt: now + 60000,
+      used: true,
+      usedBy: revokedUserUid,
+      usedAt: now - 500,
+      status: 'used',
+    });
+    await db.ref(`devices/${revokedDevice}/meta`).set({
+      deviceId: revokedDevice,
+      ownerUid: revokedUserUid,
+      claimedAt: now - 500,
+    });
+
+    // 2. Admin mencabut izin (status = 'revoked')
+    await db.ref(`permissions/${revokedUserUid}/${revokedDevice}`).set({
+      role: 'owner',
+      status: 'revoked',
+      revokedAt: now - 100,
+    });
+
+    // 3. Panggilan kedua (simulasi request paralel tertunda atau retry) harus ditolak dan TIDAK mengubah status menjadi active
+    const req = { auth: { uid: revokedUserUid }, data: { pairingCode: revokedCode } } as any;
+
+    await assert.rejects(
+      async () => handleClaimDevice(req, db),
+      (err: any) => {
+        assert.ok(err instanceof HttpsError);
+        assert.strictEqual(err.code, 'failed-precondition');
+        assert.match(err.message, /dicabut/);
+        return true;
+      }
+    );
+
+    // 4. Pastikan status di database tetap 'revoked'
+    const permSnap = await db.ref(`permissions/${revokedUserUid}/${revokedDevice}`).get();
+    assert.ok(permSnap.exists(), 'Permission node harus tetap ada');
+    assert.strictEqual(permSnap.val()?.status, 'revoked', 'Status permission HARUS tetap revoked dan tidak boleh tertimpa active!');
+  });
 });

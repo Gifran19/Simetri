@@ -22,7 +22,6 @@ class PlnTariffPreset {
 }
 class DeviceService {
   static const String _keyConnected = 'simetri_is_connected';
-  static const String _keyPower = 'simetri_device_power';
   static const String _keyPowerLimit = 'simetri_power_limit_va';
   static const String _keyMonthlyBudget = 'simetri_monthly_budget_rp';
   static const String _keyBiometricEnabled = 'simetri_biometric_enabled';
@@ -119,7 +118,6 @@ class DeviceService {
   /// Notifier status koneksi reaktif agar seluruh layar (Home, Analisis Energi, dsb.)
   /// selalu 100% sinkron secara instan (0 ms).
   static final ValueNotifier<bool> connectionNotifier = ValueNotifier<bool>(false);
-  static final ValueNotifier<bool> powerNotifier = ValueNotifier<bool>(true);
   static final ValueNotifier<double> budgetNotifier = ValueNotifier<double>(300000.0);
   static final ValueNotifier<String> deviceIdNotifier = ValueNotifier<String>(defaultDeviceId);
 
@@ -147,7 +145,6 @@ class DeviceService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyDeviceId);
     await saveConnectionState(false);
-    await saveDevicePower(false);
     deviceIdNotifier.value = defaultDeviceId;
   }
 
@@ -168,22 +165,8 @@ class DeviceService {
     connectionNotifier.value = connected;
   }
 
-  /// Cek status saklar daya terakhir kali
-  static Future<bool> getDevicePower() async {
-    final prefs = await SharedPreferences.getInstance();
-    final power = prefs.getBool(_keyPower) ?? true;
-    if (powerNotifier.value != power) {
-      powerNotifier.value = power;
-    }
-    return power;
-  }
-
-  /// Simpan status saklar daya & picu notifier reaktif
-  static Future<void> saveDevicePower(bool power) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_keyPower, power);
-    powerNotifier.value = power;
-  }
+  // CATATAN: status saklar/relay TIDAK disimpan secara lokal. Status relay hanya
+  // berasal dari telemetri perangkat (`relay_output_state`), bukan dari preferensi.
 
   // =========================
   // PERSISTENSI DAYA KONTRAK PLN & BUDGET
@@ -239,24 +222,20 @@ class DeviceService {
   // =========================
 
   Future<DeviceData> connectDevice({int powerLimitVa = 1300, double monthlyBudgetRp = 300000}) async {
-    await Future.delayed(const Duration(milliseconds: 500));
     await saveConnectionState(true);
-    await saveDevicePower(true);
 
     return getDeviceData(
       isConnected: true,
-      isPowerOn: true,
       powerLimitVa: powerLimitVa,
       monthlyBudgetRp: monthlyBudgetRp,
     );
   }
 
-  /// Menghasilkan data device sesuai kondisi koneksi dan status saklar daya.
-  /// Jika perangkat OFF, data pembacaan real-time (tegangan, arus, daya, frekuensi, PF) menjadi 0,
-  /// sedangkan data akumulasi pemakaian energi tetap tersimpan.
+  /// Menghasilkan kerangka data device. TIDAK memuat angka contoh/dummy:
+  /// semua pengukuran 0 dan histori kosong sampai telemetri nyata diterima.
+  /// Status (offline/stale/error/live) ditentukan terpisah oleh `LiveStatus`.
   static DeviceData getDeviceData({
     required bool isConnected,
-    required bool isPowerOn,
     int powerLimitVa = 1300,
     double monthlyBudgetRp = 300000,
   }) {
@@ -269,25 +248,27 @@ class DeviceService {
 
     return DeviceData(
       isConnected: true,
-      connectionType: "WiFi",
-      // Saat perangkat OFF, pembacaan sensor real-time berhenti (0)
-      voltage: isPowerOn ? 221.0 : 0.0,
-      current: isPowerOn ? 0.1 : 0.0,
-      power: isPowerOn ? 14.2 : 0.0,
-      frequency: isPowerOn ? 50.0 : 0.0,
-      powerFactor: isPowerOn ? 0.98 : 0.0,
+      connectionType: 'WiFi',
+      voltage: 0.0,
+      current: 0.0,
+      power: 0.0,
+      frequency: 0.0,
+      powerFactor: 0.0,
       powerLimitVa: powerLimitVa,
       monthlyBudgetRp: monthlyBudgetRp,
-      // Data akumulasi tetap tersimpan sampai titik dimatikan
-      dailyEnergy: 42.5,
-      dailyCost: 64000,
-      monthlyEnergy: 125,
-      monthlyCost: 54500,
-      yearlyEnergy: 825,
-      monthlyEnergyHistory: const [62, 67, 70, 65, 62, 67, 63, 67, 68, 70, 66, 75],
-      monthlyCostHistory: const [
-        54.5, 54.5, 54.5, 54.5, 54.5, 54.5, 54.5, 54.5, 54.5, 54.5, 54.5, 54.5
-      ],
+      dailyEnergy: 0.0,
+      dailyCost: 0.0,
+      monthlyEnergy: 0.0,
+      monthlyCost: 0.0,
+      yearlyEnergy: 0.0,
+      isLiveStream: false,
+      streamSource: 'Menunggu data perangkat',
+      isSensorValid: false,
+      isSensorStale: true,
+      sensorStatusMessage: 'Belum ada data dari perangkat',
+      dailyHistory: const [],
+      monthlyEnergyHistory: const [],
+      monthlyCostHistory: const [],
     );
   }
 }

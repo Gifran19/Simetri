@@ -307,7 +307,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (confirmed == true) {
       SensorStreamService.instance.stopStreaming();
-      SensorStreamService.instance.pauseStreamingToZero();
       await DeviceService.clearPairedDevice();
 
       if (mounted) {
