@@ -613,6 +613,8 @@ if (require.main === module) {
 
   /**
    * Provision akun autentikasi Firebase Auth khusus ESP32.
+   * Kredensial disimpan langsung ke file lokal yang diabaikan Git (.env.* & secrets.h),
+   * tanpa mengekspos kata sandi secara sembarangan di konsol.
    */
   async function handleProvisionEsp32(deviceId, label) {
     if (!deviceId) {
@@ -631,10 +633,14 @@ if (require.main === module) {
     console.log(`Device ID   : ${cleanDeviceId}`);
     console.log(`ESP32 UID   : ${esp32Uid}`);
     console.log(`ESP32 Email : ${esp32Email}`);
+    if (label) {
+      console.log(`Label       : ${label}`);
+    }
 
+    let isNewAccount = false;
     try {
       await auth.getUser(esp32Uid);
-      console.log('\n[INFO] Akun Firebase Auth untuk ESP32 ini sudah ada sebelumnya.');
+      console.log('\n[INFO] Akun Firebase Auth untuk ESP32 ini sudah terdaftar sebelumnya.');
     } catch (err) {
       if (err.code === 'auth/user-not-found') {
         await auth.createUser({
@@ -643,9 +649,8 @@ if (require.main === module) {
           password: generatedPassword,
           displayName: `ESP32 Device ${cleanDeviceId}`,
         });
+        isNewAccount = true;
         console.log('\n[SUKSES] Akun Firebase Auth baru berhasil dibuat!');
-        console.log(`  Password Sementara : ${generatedPassword}`);
-        console.log('  CATATAN: Masukkan email dan password ini ke secrets.h firmware ESP32.');
       } else {
         throw err;
       }
@@ -656,15 +661,47 @@ if (require.main === module) {
     const metaSnap = await metaRef.get();
     const existingMeta = metaSnap.val() || {};
 
-    await metaRef.set({
+    const updatedMeta = {
       ...existingMeta,
       deviceId: cleanDeviceId,
       deviceUid: esp32Uid,
       registeredAt: existingMeta.registeredAt || now,
       label: label || existingMeta.label || `Perangkat ${cleanDeviceId}`,
-    });
+    };
 
-    console.log(`  Metadata RTDB      : devices/${cleanDeviceId}/meta tersimpan.`);
+    await metaRef.set(updatedMeta);
+    console.log(`[SUKSES] Metadata RTDB tersimpan pada: devices/${cleanDeviceId}/meta`);
+
+    // Simpan kredensial ke file lokal yang diabaikan Git jika akun baru dibuat
+    if (isNewAccount) {
+      const localEnvPath = path.resolve(__dirname, `../.env.${cleanDeviceId.toLowerCase()}.local`);
+      const envContent = [
+        `# Kredensial Perangkat SIMETRI (DIABAIKAN OLEH GIT VIA .gitignore)`,
+        `DEVICE_ID="${cleanDeviceId}"`,
+        `DEVICE_UID="${esp32Uid}"`,
+        `DEVICE_EMAIL="${esp32Email}"`,
+        `DEVICE_PASSWORD="${generatedPassword}"`,
+        `PROVISIONED_AT="${new Date(now).toISOString()}"`,
+        `LABEL="${updatedMeta.label}"`,
+        ``,
+      ].join('\n');
+      fs.writeFileSync(localEnvPath, envContent, { mode: 0o600 });
+
+      // Perbarui firmware secrets.h lokal jika berkas ada
+      const secretsHPath = path.resolve(__dirname, '../firmware_iot/simetri_firebase_integrated/secrets.h');
+      if (fs.existsSync(secretsHPath)) {
+        let secretsContent = fs.readFileSync(secretsHPath, 'utf8');
+        secretsContent = secretsContent.replace(/#define DEVICE_ID\s+".*"/, `#define DEVICE_ID                "${cleanDeviceId}"`);
+        secretsContent = secretsContent.replace(/#define DEVICE_EMAIL\s+".*"/, `#define DEVICE_EMAIL             "${esp32Email}"`);
+        secretsContent = secretsContent.replace(/#define DEVICE_PASSWORD\s+".*"/, `#define DEVICE_PASSWORD          "${generatedPassword}"`);
+        fs.writeFileSync(secretsHPath, secretsContent);
+      }
+
+      console.log(`[KEAMANAN] Kredensial perangkat tersimpan ke berkas lokal yang diabaikan Git:`);
+      console.log(`  - ${localEnvPath}`);
+      console.log(`  - ${secretsHPath}`);
+      console.log('Nilai rahasia (password/token) tidak ditampilkan di layar konsol demi keamanan.');
+    }
   }
 
   /**
