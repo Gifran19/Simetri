@@ -2,15 +2,16 @@
 
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/device_data.dart';
+import '../services/access_approval_service.dart';
+import '../services/auth_service.dart';
 import '../services/device_service.dart';
-import '../services/pairing_service.dart';
-import '../services/sensor_stream_service.dart';
 
-/// Modal Bottom Sheet untuk menghubungkan/pairing aplikasi SIMETRI ke perangkat ESP32
-/// menggunakan kode pairing sementara dari backend Cloud Functions.
-/// Tidak memerlukan form login atau registrasi akun manual.
+/// Modal Bottom Sheet untuk menghubungkan aplikasi SIMETRI ke perangkat ESP32
+/// melalui alur Persetujuan Akses Admin Lokal (Firebase Spark Friendly).
+/// Tidak memerlukan login/registrasi pengguna dan tidak memerlukan Cloud Functions berbayar.
 class ConnectDeviceSheet extends StatefulWidget {
   final Function(DeviceData connectedDevice) onConnected;
 
@@ -23,14 +24,15 @@ class ConnectDeviceSheet extends StatefulWidget {
 class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  final TextEditingController _pairingCodeController = TextEditingController();
+  final TextEditingController _deviceIdController = TextEditingController();
 
-  // State: 0 = input kode pairing, 1 = memverifikasi ke backend, 2 = sukses
+  // State: 0 = input & verifikasi, 1 = memeriksa izin ke database, 2 = sukses
   int _state = 0;
-  String _statusMessage = 'Memverifikasi kode pairing...';
+  String _statusMessage = 'Memeriksa status izin akses...';
   String? _errorMessage;
   DeviceData? _connectedDeviceData;
-  String _claimedDeviceId = '';
+  String _targetDeviceId = '';
+  String _userAnonymousUid = 'Memuat UID...';
   bool _isEspOnline = false;
 
   @override
@@ -40,12 +42,36 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
+
+    _initAnonymousSessionAndDefaultDevice();
+  }
+
+  Future<void> _initAnonymousSessionAndDefaultDevice() async {
+    final currentDevId = await DeviceService.getPairedDeviceId();
+    if (mounted) {
+      _deviceIdController.text = currentDevId.isNotEmpty ? currentDevId : 'SIMETRI_ESP32_001';
+    }
+
+    try {
+      final user = await AuthService.instance.ensureAnonymousSession();
+      if (mounted && user != null) {
+        setState(() {
+          _userAnonymousUid = user.uid;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _userAnonymousUid = 'Sesi Lokal / Belum Login';
+        });
+      }
+    }
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
-    _pairingCodeController.dispose();
+    _deviceIdController.dispose();
     super.dispose();
   }
 
@@ -56,11 +82,24 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
     Navigator.pop(context);
   }
 
-  Future<void> _startPairing() async {
-    final code = _pairingCodeController.text.trim().toUpperCase();
-    if (code.isEmpty) {
+  void _copyUidToClipboard() {
+    if (_userAnonymousUid.isNotEmpty && !_userAnonymousUid.startsWith('Memuat')) {
+      Clipboard.setData(ClipboardData(text: _userAnonymousUid));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('UID anonim berhasil disalin ke clipboard.'),
+          duration: Duration(seconds: 2),
+          backgroundColor: Color(0xff00D9A6),
+        ),
+      );
+    }
+  }
+
+  Future<void> _verifyAccess() async {
+    final targetId = _deviceIdController.text.trim();
+    if (targetId.isEmpty) {
       setState(() {
-        _errorMessage = 'Kode pairing wajib diisi.';
+        _errorMessage = 'Device ID wajib diisi.';
       });
       return;
     }
@@ -68,39 +107,38 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
     setState(() {
       _state = 1;
       _errorMessage = null;
-      _statusMessage = 'Memverifikasi kode pairing ke server...';
+      _statusMessage = 'Memeriksa izin akses perangkat ($targetId)...';
+      _targetDeviceId = targetId;
     });
 
     try {
-      // 1. Panggil backend Cloud Function secara aman
-      final result = await PairingService.instance.claimDevice(code);
+      // 1. Verifikasi izin aktif pada node permissions/$uid/$deviceId
+      final result = await AccessApprovalService.instance.verifyDeviceAccess(targetId);
 
+      if (!result.isGranted) {
+        if (!mounted) return;
+        setState(() {
+          _state = 0;
+          _errorMessage = result.message;
+        });
+        return;
+      }
+
+      // 2. Izin aktif dikonfirmasi -> Periksa telemetri nyata ESP32
       if (!mounted) return;
       setState(() {
-        _statusMessage = 'Kode valid. Mengonfigurasi hak akses perangkat...';
-      });
-
-      final deviceId = result.deviceId;
-      _claimedDeviceId = deviceId;
-
-      // 2. Simpan Device ID publik (BUKAN kode pairing) ke local storage
-      await DeviceService.savePairedDeviceId(deviceId);
-      SensorStreamService.instance.setActiveDeviceId(deviceId);
-
-      // 3. Periksa status fisik ESP32 aktual di database
-      setState(() {
-        _statusMessage = 'Memeriksa status online perangkat ($deviceId)...';
+        _statusMessage = 'Izin aktif terverifikasi! Memeriksa telemetri ESP32...';
       });
 
       bool espOnline = false;
       try {
         final nowMs = DateTime.now().millisecondsSinceEpoch;
-        const maxStaleMs = 30000; // 30 detik toleransi data segar
+        const maxStaleMs = 30000;
 
-        // 1. Periksa node live telemetry (server_timestamp aktual yang dikirimkan firmware)
         final liveSnapshot = await FirebaseDatabase.instance
-            .ref('devices/$deviceId/live')
-            .get();
+            .ref('devices/$targetId/live')
+            .get()
+            .timeout(const Duration(seconds: 3));
 
         if (liveSnapshot.exists && liveSnapshot.value is Map) {
           final liveMap = liveSnapshot.value as Map;
@@ -116,38 +154,13 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
             espOnline = true;
           }
         }
-
-        // 2. Jika live telemetry tidak memenuhi, periksa node status
-        // PENTING: Jangan menganggap flag online=true yang sudah lama sebagai bukti online
-        if (!espOnline) {
-          final statusSnapshot = await FirebaseDatabase.instance
-              .ref('devices/$deviceId/status')
-              .get();
-          if (statusSnapshot.exists && statusSnapshot.value is Map) {
-            final val = statusSnapshot.value as Map;
-            final isOnlineFlag = val['online'] == true;
-            final dynamic rawStatusTs = val['last_seen'] ?? val['updated_at'] ?? val['timestamp'];
-            int? statusTs;
-            if (rawStatusTs is int) {
-              statusTs = rawStatusTs;
-            } else if (rawStatusTs is num) {
-              statusTs = rawStatusTs.toInt();
-            }
-
-            // Hanya anggap online jika flag bernilai true DAN timestamp status masih segar
-            if (isOnlineFlag && statusTs != null && (nowMs - statusTs).abs() < maxStaleMs) {
-              espOnline = true;
-            }
-          }
-        }
       } catch (dbErr) {
         debugPrint('ConnectDeviceSheet check status warning: $dbErr');
       }
 
       _isEspOnline = espOnline;
 
-      // 4. Update status koneksi & ambil snapshot model data
-      await DeviceService.saveConnectionState(true);
+      // 3. Konfigurasi state perangkat
       final deviceData = await DeviceService().connectDevice();
       _connectedDeviceData = deviceData;
 
@@ -157,14 +170,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
         _statusMessage = result.message;
       });
 
-      // Panggil callback
       widget.onConnected(deviceData);
-    } on PairingException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _state = 0;
-        _errorMessage = e.message;
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -216,7 +222,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: const Icon(
-                            Icons.security_rounded,
+                            Icons.verified_user_rounded,
                             color: Color(0xff00D9A6),
                             size: 20,
                           ),
@@ -227,7 +233,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Pairing Perangkat SIMETRI',
+                                'Persetujuan Akses Perangkat SIMETRI',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -236,7 +242,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                               ),
                               SizedBox(height: 2),
                               Text(
-                                'Verifikasi kode pairing aman via backend',
+                                'Persetujuan izin admin lokal tanpa login',
                                 style: TextStyle(color: Colors.white54, fontSize: 11),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -256,7 +262,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
               const SizedBox(height: 20),
 
               // Dynamic content based on _state
-              if (_state == 0) _buildPairingInputView(),
+              if (_state == 0) _buildApprovalInputView(),
               if (_state == 1) _buildVerifyingView(),
               if (_state == 2) _buildSuccessView(),
             ],
@@ -267,13 +273,13 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
   }
 
   // ----------------------------------------------------
-  // VIEW: Input Kode Pairing Sementara
+  // VIEW: Tampilan UID & Input Device ID
   // ----------------------------------------------------
-  Widget _buildPairingInputView() {
+  Widget _buildApprovalInputView() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Edukasi keamanan kode pairing
+        // Kartu Edukasi Alur Persetujuan Admin
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -284,13 +290,57 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           child: const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.vpn_key_rounded, color: Color(0xff00D9A6), size: 18),
+              Icon(Icons.admin_panel_settings_rounded, color: Color(0xff00D9A6), size: 18),
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Masukkan kode pairing sementara yang diterbitkan oleh administrator. Kode ini rahasia, sekali pakai, dan terenkripsi.',
+                  'Tunjukkan UID anonim ini kepada administrator lokal untuk disetujui pada perangkat Anda. '
+                  'Aplikasi hanya menyatakan terhubung setelah izin aktif terverifikasi.',
                   style: TextStyle(color: Color(0xffB8C2D1), fontSize: 11, height: 1.4),
                 ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Tampilan UID Anonim
+        const Text(
+          'UID Anonim Anda (Berikan ke Admin):',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xff10233F),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.fingerprint_rounded, color: Color(0xff00D9A6), size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SelectableText(
+                  _userAnonymousUid,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy_rounded, color: Color(0xff00D9A6), size: 18),
+                tooltip: 'Salin UID',
+                onPressed: _copyUidToClipboard,
               ),
             ],
           ),
@@ -307,6 +357,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
               border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 18),
                 const SizedBox(width: 8),
@@ -322,9 +373,9 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           const SizedBox(height: 14),
         ],
 
-        // Input Kode Pairing
+        // Input Device ID
         const Text(
-          'Kode Pairing Sementara:',
+          'Target Device ID:',
           style: TextStyle(
             color: Colors.white70,
             fontSize: 12,
@@ -345,31 +396,29 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
             children: [
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 14),
-                child: Icon(Icons.password_rounded, color: Color(0xff00D9A6), size: 20),
+                child: Icon(Icons.memory_rounded, color: Color(0xff00D9A6), size: 20),
               ),
               Expanded(
                 child: TextField(
-                  controller: _pairingCodeController,
-                  textCapitalization: TextCapitalization.characters,
+                  controller: _deviceIdController,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 16,
+                    fontSize: 15,
                     fontWeight: FontWeight.bold,
-                    letterSpacing: 2.0,
                   ),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
-                    hintText: 'Misal: A3F8B2C1',
-                    hintStyle: TextStyle(color: Colors.white30, fontSize: 13, letterSpacing: 0),
+                    hintText: 'Misal: SIMETRI_ESP32_001',
+                    hintStyle: TextStyle(color: Colors.white30, fontSize: 13),
                   ),
                 ),
               ),
-              if (_pairingCodeController.text.isNotEmpty)
+              if (_deviceIdController.text.isNotEmpty)
                 IconButton(
                   icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 18),
                   onPressed: () {
                     setState(() {
-                      _pairingCodeController.clear();
+                      _deviceIdController.clear();
                       _errorMessage = null;
                     });
                   },
@@ -379,15 +428,15 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
         ),
         const SizedBox(height: 20),
 
-        // Tombol Verifikasi & Hubungkan
+        // Tombol Periksa Izin Akses
         SizedBox(
           width: double.infinity,
           height: 48,
           child: ElevatedButton.icon(
-            onPressed: _startPairing,
-            icon: const Icon(Icons.check_circle_outline_rounded, size: 20),
+            onPressed: _verifyAccess,
+            icon: const Icon(Icons.verified_user_rounded, size: 20),
             label: const Text(
-              'Verifikasi & Hubungkan',
+              'Periksa & Verifikasi Izin',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
@@ -403,7 +452,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
   }
 
   // ----------------------------------------------------
-  // VIEW: Memverifikasi ke Cloud Functions
+  // VIEW: Memverifikasi Status Izin
   // ----------------------------------------------------
   Widget _buildVerifyingView() {
     return Container(
@@ -425,7 +474,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           ),
           const SizedBox(height: 18),
           const Text(
-            'Memproses Otorisasi Backend...',
+            'Memverifikasi Izin Akses...',
             style: TextStyle(
               color: Colors.white,
               fontSize: 15,
@@ -444,7 +493,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
   }
 
   // ----------------------------------------------------
-  // VIEW: Sukses Pairing
+  // VIEW: Sukses Verifikasi Izin Akses
   // ----------------------------------------------------
   Widget _buildSuccessView() {
     return Container(
@@ -472,7 +521,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           ),
           const SizedBox(height: 14),
           const Text(
-            'Pairing Berhasil!',
+            'Izin Akses Terverifikasi!',
             style: TextStyle(
               color: Colors.white,
               fontSize: 16,
@@ -481,7 +530,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           ),
           const SizedBox(height: 4),
           Text(
-            'Device ID: $_claimedDeviceId',
+            'Device ID: $_targetDeviceId',
             style: const TextStyle(
               color: Color(0xff00D9A6),
               fontSize: 13,
@@ -490,7 +539,7 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
           ),
           const SizedBox(height: 12),
 
-          // Pembeda status: Pairing berhasil vs Status ESP32 Online
+          // Pembeda status: Izin aktif vs Status Telemetri ESP32
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
@@ -515,8 +564,8 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
                 Expanded(
                   child: Text(
                     _isEspOnline
-                        ? 'ESP32 Online & mengirim data telemetri.'
-                        : 'ESP32 belum aktif/offline. Data akan otomatis masuk saat alat dinyalakan.',
+                        ? 'ESP32 Online & telemetri terbaca secara sah.'
+                        : 'ESP32 belum aktif/offline. Menunggu pengiriman data pertama dari perangkat.',
                     style: TextStyle(
                       color: _isEspOnline ? const Color(0xff00D9A6) : Colors.amber,
                       fontSize: 11,

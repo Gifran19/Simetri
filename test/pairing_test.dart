@@ -36,8 +36,8 @@ void main() {
     });
   });
 
-  group('ConnectDeviceSheet Pairing UI Tests', () {
-    testWidgets('ConnectDeviceSheet renders device code input and recommendations', (tester) async {
+  group('ConnectDeviceSheet Admin Approval UI Tests', () {
+    testWidgets('ConnectDeviceSheet renders anonymous UID, device ID input, and verify button', (tester) async {
       SharedPreferences.setMockInitialValues({'simetri_paired_device_id': 'simetri_01'});
 
       await tester.pumpWidget(
@@ -50,9 +50,9 @@ void main() {
         ),
       );
 
-      expect(find.text('Pairing Perangkat SIMETRI'), findsOneWidget);
-      expect(find.text('Kode Pairing Sementara:'), findsOneWidget);
-      expect(find.text('Verifikasi & Hubungkan'), findsOneWidget);
+      expect(find.text('Persetujuan Akses Perangkat SIMETRI'), findsOneWidget);
+      expect(find.text('Target Device ID:'), findsOneWidget);
+      expect(find.text('Periksa & Verifikasi Izin'), findsOneWidget);
     });
   });
 }
