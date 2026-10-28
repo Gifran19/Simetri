@@ -1,6 +1,19 @@
 import { describe, it, before, after } from 'node:test';
 import * as assert from 'node:assert';
+import * as path from 'node:path';
 import * as admin from 'firebase-admin';
+
+// Import fungsi inti dari skrip admin lokal
+const {
+  OFFICIAL_PRODUCTION_PROJECT_ID,
+  OFFICIAL_PRODUCTION_RTDB_URL,
+  validateProductionTarget,
+  applyGrantOwner,
+  applyAddMember,
+  applyTransferOwner,
+  applyRecover,
+  applyRevoke,
+} = require(path.resolve(__dirname, '../../../../scripts/admin_manage_access.js'));
 
 const PROJECT_ID = 'simetri-app';
 const DATABASE_NAMESPACE = 'simetri-app-default-rtdb';
@@ -333,4 +346,289 @@ describe('SIMETRI Local Admin Approval & Closed Security Rules Suite', () => {
       `Pengguna berstatus revoked harus LANGSUNG DITOLAK menulis control (401), didapat: ${afterRevokeWrite.status}`
     );
   });
+
+  // --------------------------------------------------------------------------
+  // POIN 1: PENGUJIAN PEMISAHAN OPERASI & KONSISTENSI ownerUid DAN permissions
+  // --------------------------------------------------------------------------
+  it('10. Pemisahan Operasi: grant-owner pertama berhasil, grant-owner kedua dengan UID berbeda DITOLAK', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_OP_01';
+    const userA = await createAnonymousUserInEmulator();
+    const userB = await createAnonymousUserInEmulator();
+
+    // 1. Grant-owner pertama kali kepada User A
+    const resA = await applyGrantOwner(db, devTest, userA.uid, 'ESP32 Ruang Tamu');
+    assert.strictEqual(resA.ownerUid, userA.uid);
+
+    // Verifikasi RTDB
+    const metaSnap = await db.ref(`devices/${devTest}/meta`).get();
+    assert.strictEqual(metaSnap.val()?.ownerUid, userA.uid);
+    const permSnapA = await db.ref(`permissions/${userA.uid}/${devTest}`).get();
+    assert.strictEqual(permSnapA.val()?.status, 'active');
+    assert.strictEqual(permSnapA.val()?.role, 'owner');
+
+    // 2. Grant-owner kedua kali kepada User B harus DITOLAK
+    let rejected = false;
+    try {
+      await applyGrantOwner(db, devTest, userB.uid);
+    } catch (err: any) {
+      rejected = true;
+      assert.match(err.message, /sudah memiliki pemilik/i);
+    }
+    assert.strictEqual(rejected, true, 'grant-owner tidak boleh diam-diam menimpa pemilik yang sudah ada');
+
+    // Pastikan owner tetap User A
+    const metaSnapAfter = await db.ref(`devices/${devTest}/meta`).get();
+    assert.strictEqual(metaSnapAfter.val()?.ownerUid, userA.uid);
+  });
+
+  it('11. Pemisahan Operasi: add-member menambahkan akses anggota tanpa mengubah ownerUid', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_OP_01';
+    const userA = await createAnonymousUserInEmulator();
+    const userMember = await createAnonymousUserInEmulator();
+
+    // Pastikan userA adalah owner
+    await applyGrantOwner(db, devTest, userA.uid);
+
+    // Tambahkan userMember sebagai anggota
+    const resMember = await applyAddMember(db, devTest, userMember.uid);
+    assert.strictEqual(resMember.ownerUid, userA.uid);
+
+    // Verifikasi status izin userMember
+    const permMember = await db.ref(`permissions/${userMember.uid}/${devTest}`).get();
+    assert.strictEqual(permMember.val()?.status, 'active');
+    assert.strictEqual(permMember.val()?.role, 'member');
+
+    // Verifikasi bahwa ownerUid perangkat TETAP userA
+    const metaSnap = await db.ref(`devices/${devTest}/meta`).get();
+    assert.strictEqual(metaSnap.val()?.ownerUid, userA.uid, 'add-member tidak boleh mengubah ownerUid');
+  });
+
+  it('12. Pemisahan Operasi: transfer-owner memindahkan pemilik secara sah dan mendowngrade pemilik lama', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_OP_02';
+    const userOld = await createAnonymousUserInEmulator();
+    const userNew = await createAnonymousUserInEmulator();
+    const userImpostor = await createAnonymousUserInEmulator();
+
+    // 1. Initial owner adalah userOld
+    await applyGrantOwner(db, devTest, userOld.uid);
+
+    // 2. Percobaan transfer dengan oldUserUid yang salah (userImpostor) DITOLAK
+    let wrongOldUidRejected = false;
+    try {
+      await applyTransferOwner(db, devTest, userNew.uid, userImpostor.uid);
+    } catch (err: any) {
+      wrongOldUidRejected = true;
+      assert.match(err.message, /Verifikasi pemilik lama gagal/i);
+    }
+    assert.strictEqual(wrongOldUidRejected, true);
+
+    // 3. Transfer yang valid dengan oldUserUid = userOld.uid BERHASIL
+    await applyTransferOwner(db, devTest, userNew.uid, userOld.uid);
+
+    // Verifikasi ownerUid berpindah ke userNew
+    const metaSnap = await db.ref(`devices/${devTest}/meta`).get();
+    assert.strictEqual(metaSnap.val()?.ownerUid, userNew.uid);
+
+    // Verifikasi permissions userNew adalah owner
+    const permNew = await db.ref(`permissions/${userNew.uid}/${devTest}`).get();
+    assert.strictEqual(permNew.val()?.status, 'active');
+    assert.strictEqual(permNew.val()?.role, 'owner');
+
+    // Verifikasi permissions userOld diturunkan menjadi member
+    const permOld = await db.ref(`permissions/${userOld.uid}/${devTest}`).get();
+    assert.strictEqual(permOld.val()?.status, 'active');
+    assert.strictEqual(permOld.val()?.role, 'member');
+  });
+
+  it('13. Pemisahan Operasi: recover menetapkan pemilik baru dan mencabut (revoked) UID lama secara eksplisit', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_OP_03';
+    const userLost = await createAnonymousUserInEmulator();
+    const userRecovered = await createAnonymousUserInEmulator();
+
+    // User awal memiliki perangkat
+    await applyGrantOwner(db, devTest, userLost.uid);
+
+    // HP User hilang / reset -> Jalankan recovery dengan mencabut userLost.uid
+    const recoverRes = await applyRecover(db, devTest, userRecovered.uid, userLost.uid);
+    assert.strictEqual(recoverRes.newOwner, userRecovered.uid);
+    assert.strictEqual(recoverRes.revokedOldUid, userLost.uid);
+
+    // Verifikasi ownerUid menjadi userRecovered
+    const metaSnap = await db.ref(`devices/${devTest}/meta`).get();
+    assert.strictEqual(metaSnap.val()?.ownerUid, userRecovered.uid);
+
+    // Verifikasi izin userRecovered aktif sebagai owner
+    const permRecovered = await db.ref(`permissions/${userRecovered.uid}/${devTest}`).get();
+    assert.strictEqual(permRecovered.val()?.status, 'active');
+    assert.strictEqual(permRecovered.val()?.role, 'owner');
+
+    // Verifikasi izin userLost EKSPLISIT DICABUT (revoked)
+    const permLost = await db.ref(`permissions/${userLost.uid}/${devTest}`).get();
+    assert.strictEqual(permLost.val()?.status, 'revoked');
+  });
+
+  it('14. Konsistensi revoke: Jika owner dicabut, ownerUid pada meta dikosongkan (null)', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_OP_04';
+    const userOwner = await createAnonymousUserInEmulator();
+
+    await applyGrantOwner(db, devTest, userOwner.uid);
+    assert.strictEqual((await db.ref(`devices/${devTest}/meta/ownerUid`).get()).val(), userOwner.uid);
+
+    // Cabut izin owner
+    const revokeRes = await applyRevoke(db, devTest, userOwner.uid);
+    assert.strictEqual(revokeRes.wasOwner, true);
+
+    // Verifikasi permission berstatus revoked
+    const permSnap = await db.ref(`permissions/${userOwner.uid}/${devTest}`).get();
+    assert.strictEqual(permSnap.val()?.status, 'revoked');
+
+    // Verifikasi ownerUid menjadi null
+    const metaSnap = await db.ref(`devices/${devTest}/meta`).get();
+    assert.strictEqual(metaSnap.val()?.ownerUid, null);
+  });
+
+  // --------------------------------------------------------------------------
+  // POIN 2: VALIDASI TARGET PRODUKSI SECARA TEPAT
+  // --------------------------------------------------------------------------
+  it('15. Validasi Target Produksi: Menyetujui simentri-b1a4a dan URL resmi Asia Tenggara', () => {
+    assert.strictEqual(OFFICIAL_PRODUCTION_PROJECT_ID, 'simentri-b1a4a');
+    assert.strictEqual(
+      OFFICIAL_PRODUCTION_RTDB_URL,
+      'https://simentri-b1a4a-default-rtdb.asia-southeast1.firebasedatabase.app'
+    );
+
+    // Tidak boleh melempar error jika target cocok persis
+    assert.doesNotThrow(() => {
+      validateProductionTarget(
+        'simentri-b1a4a',
+        'https://simentri-b1a4a-default-rtdb.asia-southeast1.firebasedatabase.app'
+      );
+    });
+
+    // Menangani trailing slash dengan aman
+    assert.doesNotThrow(() => {
+      validateProductionTarget(
+        'simentri-b1a4a',
+        'https://simentri-b1a4a-default-rtdb.asia-southeast1.firebasedatabase.app/'
+      );
+    });
+  });
+
+  it('16. Validasi Target Produksi: Menolak projectId atau URL RTDB yang salah sebelum penulisan', () => {
+    // 1. Project ID salah
+    assert.throws(
+      () => {
+        validateProductionTarget(
+          'simentri-b1a4a-fake',
+          'https://simentri-b1a4a-default-rtdb.asia-southeast1.firebasedatabase.app'
+        );
+      },
+      /Target Project ID "simentri-b1a4a-fake" tidak valid/i
+    );
+
+    // 2. URL RTDB region salah (misal default us-central1)
+    assert.throws(
+      () => {
+        validateProductionTarget(
+          'simentri-b1a4a',
+          'https://simentri-b1a4a.firebaseio.com'
+        );
+      },
+      /Target Database URL .* tidak valid/i
+    );
+
+    // 3. Project ID orang lain
+    assert.throws(
+      () => {
+        validateProductionTarget(
+          'my-test-app',
+          'https://my-test-app-default-rtdb.asia-southeast1.firebasedatabase.app'
+        );
+      },
+      /Target Project ID "my-test-app" tidak valid/i
+    );
+  });
+
+  // --------------------------------------------------------------------------
+  // POIN 3: KEAMANAN SECURITY RULES PADA PARENT LEVEL devices/$deviceId
+  // --------------------------------------------------------------------------
+  it('17. Security Rules: Parent level devices/$deviceId DITOLAK dibaca secara langsung (tidak ada .read cascade)', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_RULE_01';
+    const userOwner = await createAnonymousUserInEmulator();
+
+    // Berikan izin active owner
+    await applyGrantOwner(db, devTest, userOwner.uid);
+
+    // Siapkan live data
+    await db.ref(`devices/${devTest}/live`).set({
+      voltage: 220.0,
+      current: 1.0,
+      power: 220.0,
+      energy_kwh: 5.0,
+      relay_state: true,
+      timestamp: Date.now(),
+    });
+
+    // 1. User mencoba membaca parent `devices/$deviceId` langsung
+    const parentReadUrl = `http://${EMULATOR_HOST}/devices/${devTest}.json?ns=${DATABASE_NAMESPACE}&auth=${userOwner.idToken}`;
+    const res = await fetch(parentReadUrl);
+
+    assert.strictEqual(
+      res.status,
+      401,
+      `Parent path devices/$deviceId TIDAK BOLEH dapat dibaca langsung (harus 401 Unauthorized), didapat: ${res.status}`
+    );
+
+    // 2. Bandingkan dengan child node yang diizinkan (devices/$deviceId/live) -> HARUS 200 OK
+    const childReadUrl = `http://${EMULATOR_HOST}/devices/${devTest}/live.json?ns=${DATABASE_NAMESPACE}&auth=${userOwner.idToken}`;
+    const childRes = await fetch(childReadUrl);
+    assert.strictEqual(
+      childRes.status,
+      200,
+      `Child node devices/$deviceId/live HARUS diizinkan untuk active permission, didapat: ${childRes.status}`
+    );
+  });
+
+  it('18. Security Rules: Parent level devices/$deviceId DITOLAK ditulis secara langsung (tidak ada .write cascade)', async () => {
+    const devTest = 'SIMETRI_DEV_TEST_RULE_02';
+    const userOwner = await createAnonymousUserInEmulator();
+
+    await applyGrantOwner(db, devTest, userOwner.uid);
+
+    // User mencoba menimpa seluruh tree devices/$deviceId secara langsung
+    const parentWriteUrl = `http://${EMULATOR_HOST}/devices/${devTest}.json?ns=${DATABASE_NAMESPACE}&auth=${userOwner.idToken}`;
+    const res = await fetch(parentWriteUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        meta: { ownerUid: 'hacked_owner' },
+        live: { voltage: 999 },
+      }),
+    });
+
+    assert.strictEqual(
+      res.status,
+      401,
+      `Parent path devices/$deviceId TIDAK BOLEH dapat ditulis langsung (harus 401 Unauthorized), didapat: ${res.status}`
+    );
+  });
+
+  it('19. Security Rules: Root devices collection DITOLAK dibaca maupun ditulis secara langsung', async () => {
+    const userOwner = await createAnonymousUserInEmulator();
+
+    // 1. Read /devices.json
+    const rootReadUrl = `http://${EMULATOR_HOST}/devices.json?ns=${DATABASE_NAMESPACE}&auth=${userOwner.idToken}`;
+    const readRes = await fetch(rootReadUrl);
+    assert.strictEqual(readRes.status, 401, `Root devices collection tidak boleh dapat dibaca (harus 401)`);
+
+    // 2. Write /devices.json
+    const rootWriteUrl = `http://${EMULATOR_HOST}/devices.json?ns=${DATABASE_NAMESPACE}&auth=${userOwner.idToken}`;
+    const writeRes = await fetch(rootWriteUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ malicious: true }),
+    });
+    assert.strictEqual(writeRes.status, 401, `Root devices collection tidak boleh dapat ditulis (harus 401)`);
+  });
 });
+

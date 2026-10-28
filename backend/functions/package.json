@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "serve": "tsc -w",
-    "test": "node --test lib/__tests__/*.test.js"
+    "test": "node --test lib/__tests__/admin_approval_unit.test.js",
+    "test:emulator": "node --test lib/__tests__/admin_approval.test.js"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",

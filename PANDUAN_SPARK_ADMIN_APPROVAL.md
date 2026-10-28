@@ -49,25 +49,67 @@ Skrip admin lokal berjalan langsung di PC administrator dengan Node.js dan Fireb
 2. Klik **Generate new private key**, simpan berkas dengan nama `serviceAccountKey.json` di root direktori proyek.
 3. Pastikan `serviceAccountKey.json` terdaftar di `.gitignore` (jangan pernah di-commit).
 
-### B. Perintah Utama
+### B. Perintah Utama Administrator Lokal
 
-#### 1. Memberikan Izin Akses (`grant`)
-Digunakan saat pengguna meminta izin akses ke perangkat dengan menyerahkan UID anonimnya:
+Semua perintah di bawah ini dapat disalin dan dijalankan langsung dari terminal root proyek SIMETRI:
+
+#### 1. Menetapkan Pemilik Pertama (`grant-owner`)
+Digunakan saat perangkat pertama kali dipasang dan diberikan kepada pemilik utama:
 ```powershell
 # Mode Emulator (Pengujian Lokal)
-node scripts/admin_manage_access.js --mode=emulator grant SIMETRI_ESP32_001 <userUid> [owner|member] [label]
+node scripts/admin_manage_access.js --mode=emulator grant-owner SIMETRI_ESP32_001 <userUid> "Smart Meter Rumah"
 
 # Mode Produksi (Cloud Firebase Spark)
-$env:FIREBASE_DATABASE_URL="https://simentri-b1a4a-default-rtdb.asia-southeast1.firebasedatabase.app"
-node scripts/admin_manage_access.js --mode=production grant SIMETRI_ESP32_001 <userUid> owner "Smart Meter Utama"
+node scripts/admin_manage_access.js --mode=production grant-owner SIMETRI_ESP32_001 <userUid> "Smart Meter Rumah"
 ```
-*Tindakan Otomatis Skrip*:
-- Memvalidasi bahwa `userUid` dan `deviceId` valid.
-- Menjaga konsistensi: jika peran adalah `owner`, memperbarui `devices/<deviceId>/meta/ownerUid = <userUid>`. Jika sebelumnya ada owner lain, owner lama secara otomatis diturunkan menjadi `member`.
-- Menulis data izin ke `permissions/<userUid>/<deviceId>` dengan `status: "active"`.
+*Aturan Keamanan*:
+- Jika perangkat belum memiliki pemilik, skrip menetapkan `meta.ownerUid = <userUid>` dan memberikan izin `status: 'active'`, `role: 'owner'`.
+- Jika perangkat **sudah memiliki pemilik lain**, skrip **MENOLAK** operasi secara tegas untuk mencegah pengambilalihan kepemilikan secara diam-diam. Gunakan `transfer-owner` atau `recover`.
 
-#### 2. Mencabut Izin Akses (`revoke`)
-Digunakan jika perangkat dipindahtangankan, disewakan, atau pengguna kehilangan hak:
+#### 2. Menambahkan Anggota Keluarga / Operator (`add-member`)
+Digunakan untuk memberikan hak akses pantau dan kontrol kepada pengguna tambahan tanpa mengubah pemilik perangkat:
+```powershell
+# Mode Emulator
+node scripts/admin_manage_access.js --mode=emulator add-member SIMETRI_ESP32_001 <memberUserUid>
+
+# Mode Produksi
+node scripts/admin_manage_access.js --mode=production add-member SIMETRI_ESP32_001 <memberUserUid>
+```
+*Aturan Keamanan*:
+- Memberikan izin `status: 'active'`, `role: 'member'` pada `permissions/<memberUserUid>/SIMETRI_ESP32_001`.
+- `ownerUid` pada `devices/SIMETRI_ESP32_001/meta` **TIDAK BERUBAH** sama sekali.
+
+#### 3. Transfer Kepemilikan Resmi (`transfer-owner`)
+Digunakan saat pemilik lama secara sah menyerahkan perangkat kepada pemilik baru:
+```powershell
+# Mode Emulator
+node scripts/admin_manage_access.js --mode=emulator transfer-owner SIMETRI_ESP32_001 <newUserUid> <oldUserUid>
+
+# Mode Produksi
+node scripts/admin_manage_access.js --mode=production transfer-owner SIMETRI_ESP32_001 <newUserUid> <oldUserUid>
+```
+*Aturan Keamanan*:
+- Skrip memverifikasi bahwa `<oldUserUid>` cocok dengan pemilik perangkat saat ini. Jika tidak cocok, transfer ditolak.
+- Mengubah `meta.ownerUid` menjadi `<newUserUid>`.
+- Memberikan izin `owner` kepada `<newUserUid>`.
+- Menurunkan izin `<oldUserUid>` menjadi `role: 'member'` secara otomatis.
+
+#### 4. Pemulihan Akses Darurat (`recover`)
+Digunakan saat ponsel pemilik lama hilang, rusak, atau aplikasi di-uninstall sehingga UID anonim lama hangus:
+```powershell
+# Mode Emulator (Mencabut UID lama secara eksplisit)
+node scripts/admin_manage_access.js --mode=emulator recover SIMETRI_ESP32_001 <newUserUid> <oldUserUidToRevoke>
+
+# Mode Produksi
+node scripts/admin_manage_access.js --mode=production recover SIMETRI_ESP32_001 <newUserUid> <oldUserUidToRevoke>
+```
+*Aturan Keamanan*:
+- Menetapkan `<newUserUid>` sebagai pemilik baru (`meta.ownerUid`).
+- Memberikan izin `owner` aktif kepada `<newUserUid>`.
+- Jika `<oldUserUidToRevoke>` dicantumkan, skrip secara eksplisit menandai izin UID lama menjadi `status: 'revoked'`, sehingga akses ponsel lama langsung diputus seketika.
+
+#### 5. Mencabut Izin Akses (`revoke`)
+Digunakan jika pengguna tidak lagi berhak mengakses perangkat:
 ```powershell
 # Mode Emulator
 node scripts/admin_manage_access.js --mode=emulator revoke SIMETRI_ESP32_001 <userUid>
@@ -75,43 +117,47 @@ node scripts/admin_manage_access.js --mode=emulator revoke SIMETRI_ESP32_001 <us
 # Mode Produksi
 node scripts/admin_manage_access.js --mode=production revoke SIMETRI_ESP32_001 <userUid>
 ```
-*Tindakan Otomatis Skrip*:
-- Mengubah `status` pada `permissions/<userUid>/<deviceId>` menjadi `"revoked"`.
-- Jika pengguna tersebut adalah `ownerUid` pada `devices/<deviceId>/meta`, menghapus kepemilikannya (`ownerUid: null`).
-- Security Rules langsung memutus akses baca telemetri dan kontrol relay pengguna seketika.
+*Aturan Keamanan*:
+- Mengubah status izin pada `permissions/<userUid>/<deviceId>` menjadi `'revoked'`.
+- Jika pengguna tersebut adalah pemilik (`ownerUid`), kepemilikan pada `meta.ownerUid` otomatis dikosongkan (`null`).
+- Security Rules Realtime Database langsung memutus akses baca/tulis seketika.
 
-#### 3. Menampilkan Status Perangkat & Izin (`list`)
+#### 6. Menampilkan Daftar Perangkat & Hak Akses (`list`)
 ```powershell
-# Menampilkan seluruh perangkat
+# Menampilkan ringkasan seluruh perangkat terdaftar
 node scripts/admin_manage_access.js --mode=emulator list
 
-# Menampilkan rincian perangkat dan seluruh pemegang izin
+# Menampilkan rincian perangkat tertentu beserta seluruh UID yang memiliki izin
 node scripts/admin_manage_access.js --mode=emulator list SIMETRI_ESP32_001
 ```
 
-#### 4. Mendaftarkan Akun Autentikasi ESP32 (`provision-esp32`)
+#### 7. Mendaftarkan Akun Autentikasi ESP32 (`provision-esp32`)
 ```powershell
-node scripts/admin_manage_access.js --mode=production provision-esp32 SIMETRI_ESP32_001 "Smart Meter Utama"
+# Mode Produksi
+node scripts/admin_manage_access.js --mode=production provision-esp32 SIMETRI_ESP32_001 "Smart Meter Rumah"
 ```
 *Tindakan*:
-- Membuat akun Firebase Auth dengan email `device_simetri_esp32_001@simetri.internal` dan UID `esp32_SIMETRI_ESP32_001`.
-- Menghasilkan password acak aman 24 karakter heksadesimal yang dicetak satu kali di konsol.
+- Membuat akun Firebase Auth: email `device_simetri_esp32_001@simetri.internal` dengan UID `esp32_SIMETRI_ESP32_001`.
+- Menghasilkan password acak aman 24 karakter heksadesimal untuk dicatat ke `secrets.h` firmware ESP32.
 - Menginisialisasi node metadata `devices/SIMETRI_ESP32_001/meta`.
+
+### C. Validasi Target Produksi Otomatis (Mencegah Salah Proyek / Salah Database)
+Skrip `admin_manage_access.js` mengimplementasikan pengaman otomatis sebelum penulisan apa pun dilakukan pada mode produksi:
+1. **Validasi Project ID**: Memastikan `serviceAccountKey.json` berasal dari proyek resmi `simentri-b1a4a`. Jika bukan, skrip berhenti seketika dengan pesan `[SECURITY ERROR]`.
+2. **Validasi Database URL**: Memastikan URL Realtime Database mengarah ke endpoint resmi Asia Tenggara:
+   `https://simentri-b1a4a-default-rtdb.asia-southeast1.firebasedatabase.app`
+3. Target pengujian emulator sepenuhnya terisolasi dan tidak akan pernah menyentuh cloud produksi.
 
 ---
 
-## 3. Panduan Penggantian Security Rules Cloud yang Tertutup
+## 3. Panduan Security Rules Realtime Database yang Tertutup
 
-Realtime Database pada proyek Firebase baru biasanya dibuat dalam mode *test* (terbuka untuk publik selama 30 hari). Untuk menguncinya secara aman pada Spark tier:
+Security Rules SIMETRI dirancang dengan prinsip hak akses terkecil (*least privilege*):
+> [!IMPORTANT]
+> **Pencegahan Kebocoran Akses Parent Cascade**:
+> Realtime Database memiliki sifat bawaan bahwa izin `.read` atau `.write` pada node induk (*parent*) tidak dapat dibatalkan oleh node anak (*child*). Oleh karena itu, path parent `devices` dan `devices/$deviceId` **TIDAK MEMILIKI `.read` MAUPUN `.write`**. Akses didelegasikan secara terisolasi hanya pada child node di bawahnya (`meta`, `live`, `status`, `control`, `energy_data`).
 
-### Langkah Penggantian via Firebase Console (Tanpa Biaya / Tanpa Blaze)
-1. Buka peramban ke [Firebase Console](https://console.firebase.google.com).
-2. Pilih project `simentri-b1a4a`.
-3. Di panel menu kiri, klik **Build** -> **Realtime Database**.
-4. Pilih database instance `simentri-b1a4a-default-rtdb` (region `asia-southeast1`).
-5. Klik tab **Rules**.
-6. Ganti seluruh teks rules yang ada dengan isi berkas `database.rules.json` berikut:
-
+### Isi Aturan Resmi (`database.rules.json`)
 ```json
 {
   "rules": {
@@ -128,7 +174,7 @@ Realtime Database pada proyek Firebase baru biasanya dibuat dalam mode *test* (t
     "devices": {
       "$deviceId": {
         "meta": {
-          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === data.child('deviceUid').val())",
+          ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": false
         },
         "live": {
@@ -164,30 +210,31 @@ Realtime Database pada proyek Firebase baru biasanya dibuat dalam mode *test* (t
   }
 }
 ```
-7. Klik tombol **Publish**.
 
-*Atau via Firebase CLI (Jika sudah login CLI)*:
-```powershell
-firebase deploy --only database --project simentri-b1a4a
-```
-*(Deploy database rules didukung penuh pada Spark Free tier tanpa memerlukan Blaze plan).*
+### Langkah Penggantian via Firebase Console (Tanpa Biaya / Tanpa Blaze)
+1. Buka peramban ke [Firebase Console](https://console.firebase.google.com).
+2. Pilih project `simentri-b1a4a`.
+3. Di panel menu kiri, klik **Build** -> **Realtime Database**.
+4. Pilih database instance `simentri-b1a4a-default-rtdb` (region `asia-southeast1`).
+5. Klik tab **Rules**.
+6. Ganti seluruh teks rules dengan isi `database.rules.json` di atas.
+7. Klik tombol **Publish**.
 
 ---
 
-## 4. Hasil Pengujian Emulator Suite (20/20 Test Passed)
+## 4. Hasil Verifikasi Pengujian Otomatis
 
-Seluruh skenario telah diuji langsung pada Firebase Emulator Suite lokal (`Auth` dan `Database Emulator` aktif):
+Seluruh logika izin dan isolasi aturan keamanan telah diverifikasi lulus pengujian:
 
-### Rincian Uji Suite Admin Approval (`admin_approval.test.ts`):
-1. **Akses Tanpa Izin Ditolak**: Pengguna anonim tanpa entri izin mencoba membaca `devices/DEV/live` $\to$ Ditolak HTTP 401 (*Permission Denied*).
-2. **Penolakan Modifikasi Tanpa Izin**: Pengguna tanpa izin mencoba menulis saklar `control` $\to$ Ditolak HTTP 401.
-3. **Aplikasi Dilarang Mengubah Izin Sendiri**: Klien anonim mencoba menulis langsung ke node `permissions` $\to$ Ditolak HTTP 401 (`.write: false`).
-4. **Pemberian Izin oleh Admin Lokal**: Admin lokal menulis izin `active` via Admin SDK $\to$ Izin tersimpan, `ownerUid` konsisten, dan pengguna dapat membaca izinnya sendiri.
-5. **Akses Pemilik Aktif Berhasil**: Pengguna dengan status `active` membaca telemetri `live` dan menulis perintah `control` $\to$ Berhasil HTTP 200.
-6. **Isolasi Antarperangkat**: Pengguna dengan izin pada `DEV_A` mencoba membaca telemetri `DEV_B` $\to$ Ditolak HTTP 401.
-7. **Penolakan Tulis Telemetri oleh Aplikasi**: Pengguna (meskipun aktif) mencoba menulis data palsu ke `devices/DEV_A/live` $\to$ Ditolak HTTP 401 (hanya ESP32 yang boleh menulis).
-8. **ESP32 Telemetri Sah**: Akun ESP32 resmi (`esp32_DEV_A`) menulis data PZEM ke `devices/DEV_A/live` $\to$ Berhasil HTTP 200.
-9. **Pencabutan Izin (Revocation)**: Admin mengubah status izin menjadi `revoked` dan mengosongkan `ownerUid` $\to$ Pengguna seketika ditolak membaca dan menulis ke perangkat.
+### Rincian Unit Tests (`admin_approval_unit.test.ts` - 14/14 Tests Passed):
+1. **Validasi Target Produksi**: Menyetujui `simentri-b1a4a` dan URL Asia Tenggara resmi.
+2. **Penolakan Target Produksi Salah**: Menolak `projectId` atau Database URL yang tidak cocok sebelum ada operasi penulisan.
+3. **Pemisahan Operasi `grant-owner`**: Berhasil menetapkan pemilik pertama; percobaan kedua dengan UID berbeda ditolak (mencegah silent hijacking).
+4. **Pemisahan Operasi `add-member`**: Menambahkan izin role member tanpa mengubah `meta.ownerUid`.
+5. **Pemisahan Operasi `transfer-owner`**: Memvalidasi pemilik lama, memindahkan `ownerUid` ke pemilik baru, dan menurunkan pemilik lama ke member.
+6. **Pemisahan Operasi `recover`**: Memindahkan kepemilikan dan mencabut izin UID lama secara eksplisit (`status: 'revoked'`).
+7. **Pencabutan Izin `revoke`**: Mengubah izin menjadi `revoked` dan mengosongkan `meta.ownerUid` jika yang dicabut adalah pemilik.
+8. **Audit Parent Cascade Security Rules**: Memverifikasi bahwa `database.rules.json` tidak memiliki `.read` atau `.write` pada level parent `devices` maupun `devices/$deviceId`, sehingga child node terlindungi secara ketat.
 
 ---
 
@@ -198,3 +245,4 @@ Seluruh skenario telah diuji langsung pada Firebase Emulator Suite lokal (`Auth`
 | **Tidak Ada Kode Pairing Otomatis Mandiri** | Pengguna tidak dapat menghubungkan perangkat sendiri tanpa melibatkan administrator lokal. | Cocok untuk prototipe internal, laboratorium, atau instalasi rumah mandiri di mana admin memegang kendali PC. |
 | **Pembersihan Data Aplikasi / Ganti Ponsel** | Jika pengguna melakukan *Clear Data* atau install ulang, UID anonim lama hilang dan UID baru terbentuk. | Pengguna cukup memberikan UID barunya ke admin lokal, admin menjalankan perintah `grant` ulang untuk mengalihkan izin. |
 | **Tidak Ada Agregasi Cron Otomatis Cloud** | Node `energy_data` tahunan tidak diagregasi secara otomatis oleh cloud backend setiap tengah malam. | Agregasi dapat dijalankan via skrip cron lokal admin atau firmware ESP32 dapat disesuaikan untuk menulis ringkasan akhir hari. |
+
