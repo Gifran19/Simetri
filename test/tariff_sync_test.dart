@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_test_app/models/sensor_reading.dart';
 import 'package:my_test_app/services/live_status.dart';
 import 'package:my_test_app/services/device_service.dart';
-import 'package:my_test_app/services/sensor_stream_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

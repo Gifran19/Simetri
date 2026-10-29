@@ -11,7 +11,6 @@ class DailyEnergyChart extends StatelessWidget {
     this.isConnected = true,
   });
 
-  static const List<double> _defaultData = [2.1, 3.5, 1.8, 4.2, 3.1, 5.0, 4.5];
   static const List<String> _days = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 
   @override

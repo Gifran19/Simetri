@@ -434,14 +434,16 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {});
 
     switch (result) {
-      case TariffWriteResult.synced:
-        _showNotification('Tarif Rp ${value.toInt()}/kWh berhasil diterapkan perangkat.');
+      case TariffWriteResult.written:
+        final reachable = SensorStreamService.instance.status.deviceReachable;
+        if (reachable) {
+          _showNotification('Tarif tersimpan di cloud. Menunggu konfirmasi dari perangkat...');
+        } else {
+          _showNotification('Tarif tersimpan di cloud. Perangkat sedang offline, akan diterapkan saat online.');
+        }
         break;
-      case TariffWriteResult.writtenToCloud:
-        _showNotification('Tarif disimpan di cloud. Menunggu konfirmasi perangkat...');
-        break;
-      case TariffWriteResult.deviceOffline:
-        _showNotification('Tarif disimpan di cloud. Perangkat offline, akan diterapkan saat online.');
+      case TariffWriteResult.demoNotSent:
+        _showNotification('Mode DEMO: tarif tidak dikirim ke perangkat nyata.', isWarning: true);
         break;
       case TariffWriteResult.permissionDenied:
         _showNotification('Gagal mengubah tarif: Izin ditolak oleh server Firebase.', isWarning: true);
@@ -450,7 +452,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _showNotification('Gagal mengirim tarif: batas waktu habis.', isWarning: true);
         break;
       case TariffWriteResult.invalidValue:
-        _showNotification('Nilai tarif tidak valid (harus Rp 100 - Rp 50.000).', isWarning: true);
+        _showNotification('Nilai tarif tidak valid (harus lebih dari Rp 0).', isWarning: true);
         break;
       case TariffWriteResult.firebaseUnavailable:
         _showNotification('Firebase belum siap. Periksa koneksi internet.', isWarning: true);
