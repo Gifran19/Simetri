@@ -432,7 +432,10 @@ class _EnergyScreenState extends State<EnergyScreen> {
         if (_loadingData)
           _buildLoadingCard(height: 300)
         else
-          MonthlyEnergyChart(data: _yearData.monthlyEnergy),
+          MonthlyEnergyChart(
+            data: _yearData.monthlyEnergy,
+            isConnected: _isConnected,
+          ),
 
         const SizedBox(height: 18),
 
@@ -488,7 +491,10 @@ class _EnergyScreenState extends State<EnergyScreen> {
                     )
                   : Column(
                       children: [
-                        MonthlyEnergyChart(data: _yearData.monthlyEnergy),
+                        MonthlyEnergyChart(
+                          data: _yearData.monthlyEnergy,
+                          isConnected: _isConnected,
+                        ),
                         const SizedBox(height: 18),
                         MonthlyCostChart(data: _yearData.monthlyCost),
                       ],

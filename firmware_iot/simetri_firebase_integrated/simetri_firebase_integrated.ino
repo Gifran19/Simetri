@@ -885,9 +885,14 @@ bool kirimTelemetriCloud() {
     doc["sensor_status"]      = "stale_or_disconnected";
   }
 
+  float dailyCost = (float)roundf(energiHari * tarifPerKwh);
+  float monthlyCost = (float)roundf(energiBulan * tarifPerKwh);
+
   doc["energy_kwh"]           = isnan(energyKwh) ? (float)0.0 : energyKwh;
   doc["daily_energy"]         = energiHari;
   doc["monthly_energy"]       = energiBulan;
+  doc["daily_cost"]           = dailyCost;
+  doc["monthly_cost"]         = monthlyCost;
   doc["tariff_per_kwh"]       = tarifPerKwh;
 
   // Pemisahan status relay

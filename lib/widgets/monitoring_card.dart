@@ -351,7 +351,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     child: GaugeMeter(
                       value: isReadingOk ? widget.voltage / 250 : 0.0,
                       valueText: isReadingOk
-                          ? '${widget.voltage.toInt()}'
+                          ? widget.voltage.toStringAsFixed(1)
                           : '--',
                       unitText: 'V',
                       title: 'Tegangan',
@@ -407,7 +407,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     child: GaugeMeter(
                       value: isReadingOk ? widget.current / 5 : 0.0,
                       valueText: isReadingOk
-                          ? widget.current.toStringAsFixed(1)
+                          ? widget.current.toStringAsFixed(3)
                           : '--',
                       unitText: 'A',
                       title: 'Arus',
@@ -478,7 +478,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
     switch (_selectedMetric) {
       case 0:
         title = 'Tegangan Listrik';
-        valueText = isLive ? '${widget.voltage.toInt()}' : '--';
+        valueText = isLive ? widget.voltage.toStringAsFixed(1) : '--';
         unit = 'Volt';
         progress = isLive ? (widget.voltage / 250).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00FFA3), Color(0xff00D9A6), Color(0xff00A896)];
@@ -497,7 +497,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
       case 2:
       default:
         title = 'Kuat Arus';
-        valueText = isLive ? widget.current.toStringAsFixed(1) : '--';
+        valueText = isLive ? widget.current.toStringAsFixed(3) : '--';
         unit = 'Ampere';
         progress = isLive ? (widget.current / 5).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xffF9D423), Color(0xffB7FF00), Color(0xff70E000)];

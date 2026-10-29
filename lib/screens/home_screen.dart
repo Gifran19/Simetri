@@ -165,9 +165,22 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (_isConnected) {
-        final effectiveTariff = reading.appliedTariffPerKwh ?? DeviceService.currentTariff;
-        final double dailyCost = reading.dailyEnergyKwh * effectiveTariff;
-        final double monthlyCost = reading.monthlyEnergyKwh * effectiveTariff;
+        // Biaya: Prioritaskan hasil perhitungan langsung dari ESP32 (reading.dailyCost / monthlyCost).
+        // Jika firmware belum menyertakan daily_cost tetapi appliedTariffPerKwh ada, kalikan energi dengan tarif terkonfirmasi.
+        // Jika tarif yang diterapkan perangkat belum diketahui, JANGAN gunakan tarif lokal sebagai pengganti diam-diam.
+        final double? dailyCost;
+        final double? monthlyCost;
+
+        if (reading.dailyCost != null) {
+          dailyCost = reading.dailyCost;
+          monthlyCost = reading.monthlyCost;
+        } else if (reading.appliedTariffPerKwh != null) {
+          dailyCost = (reading.dailyEnergyKwh * reading.appliedTariffPerKwh!).roundToDouble();
+          monthlyCost = (reading.monthlyEnergyKwh * reading.appliedTariffPerKwh!).roundToDouble();
+        } else {
+          dailyCost = null;
+          monthlyCost = null;
+        }
 
         setState(() {
           _device = _device.copyWith(
@@ -178,8 +191,10 @@ class _HomeScreenState extends State<HomeScreen> {
             powerFactor: reading.powerFactor,
             dailyEnergy: reading.dailyEnergyKwh,
             dailyCost: dailyCost,
+            resetDailyCost: dailyCost == null,
             monthlyEnergy: reading.monthlyEnergyKwh,
             monthlyCost: monthlyCost,
+            resetMonthlyCost: monthlyCost == null,
             isLiveStream: reading.isFromFirebase,
             streamSource: SensorStreamService.instance.sourceLabel,
             isSensorValid: reading.isValid,
@@ -860,15 +875,17 @@ class _HomeScreenState extends State<HomeScreen> {
         EnergySummaryCard(
           titleLeft: 'Total Pemakaian Hari Ini',
           valueLeft: _isConnected && _status.showsMeasurements
-              ? '${_device.dailyEnergy.toStringAsFixed(2)} kWh'
+              ? '${_device.dailyEnergy.toStringAsFixed(3)} kWh'
               : '-- kWh',
           titleRight: 'Total Biaya Hari Ini',
           valueRight: _isConnected && _status.showsMeasurements
-              ? _currencyFormatter.format(_device.dailyCost)
+              ? (_device.dailyCost != null ? _currencyFormatter.format(_device.dailyCost) : 'Rp --')
               : 'Rp --',
           badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
           badgeRight: _isConnected
-              ? 'Tarif Rp ${(_latestReading?.appliedTariffPerKwh ?? DeviceService.currentTariff).toInt()}/kWh'
+              ? (_latestReading?.appliedTariffPerKwh != null
+                  ? 'Tarif Rp ${_latestReading!.appliedTariffPerKwh!.toInt()}/kWh'
+                  : 'Tarif belum dikonfirmasi')
               : 'Belum ada data',
         ),
         const SizedBox(height: 14),
@@ -883,18 +900,21 @@ class _HomeScreenState extends State<HomeScreen> {
         EnergySummaryCard(
           titleLeft: 'Total Pemakaian Bulan Ini',
           valueLeft: _isConnected && _status.showsMeasurements
-              ? '${_device.monthlyEnergy.toStringAsFixed(1)} kWh'
+              ? '${_device.monthlyEnergy.toStringAsFixed(3)} kWh'
               : '-- kWh',
           titleRight: 'Total Biaya Bulan Ini',
           valueRight: _isConnected && _status.showsMeasurements
-              ? _currencyFormatter.format(_device.monthlyCost)
+              ? (_device.monthlyCost != null ? _currencyFormatter.format(_device.monthlyCost) : 'Rp --')
               : 'Rp --',
           badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
           badgeRight: _isConnected ? 'Target Anggaran' : 'Belum ada data',
         ),
         const SizedBox(height: 14),
 
-        MonthlyEnergyChart(data: _device.monthlyEnergyHistory),
+        MonthlyEnergyChart(
+          data: _device.monthlyEnergyHistory,
+          isConnected: _isConnected,
+        ),
         const SizedBox(height: 24),
       ],
     );
@@ -974,15 +994,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   EnergySummaryCard(
                     titleLeft: 'Total Pemakaian Hari Ini',
                     valueLeft: _isConnected && _status.showsMeasurements
-                        ? '${_device.dailyEnergy.toStringAsFixed(2)} kWh'
+                        ? '${_device.dailyEnergy.toStringAsFixed(3)} kWh'
                         : '-- kWh',
                     titleRight: 'Total Biaya Hari Ini',
                     valueRight: _isConnected && _status.showsMeasurements
-                        ? _currencyFormatter.format(_device.dailyCost)
+                        ? (_device.dailyCost != null ? _currencyFormatter.format(_device.dailyCost) : 'Rp --')
                         : 'Rp --',
                     badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
                     badgeRight: _isConnected
-                        ? 'Tarif Rp ${(_latestReading?.appliedTariffPerKwh ?? DeviceService.currentTariff).toInt()}/kWh'
+                        ? (_latestReading?.appliedTariffPerKwh != null
+                            ? 'Tarif Rp ${_latestReading!.appliedTariffPerKwh!.toInt()}/kWh'
+                            : 'Tarif belum dikonfirmasi')
                         : 'Belum ada data',
                   ),
                   const SizedBox(height: 16),
@@ -996,18 +1018,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   EnergySummaryCard(
                     titleLeft: 'Total Pemakaian Bulan Ini',
                     valueLeft: _isConnected && _status.showsMeasurements
-                        ? '${_device.monthlyEnergy.toStringAsFixed(1)} kWh'
+                        ? '${_device.monthlyEnergy.toStringAsFixed(3)} kWh'
                         : '-- kWh',
                     titleRight: 'Total Biaya Bulan Ini',
                     valueRight: _isConnected && _status.showsMeasurements
-                        ? _currencyFormatter.format(_device.monthlyCost)
+                        ? (_device.monthlyCost != null ? _currencyFormatter.format(_device.monthlyCost) : 'Rp --')
                         : 'Rp --',
                     badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
                     badgeRight: _isConnected ? 'Target Anggaran' : 'Belum ada data',
                   ),
                   const SizedBox(height: 16),
 
-                  MonthlyEnergyChart(data: _device.monthlyEnergyHistory),
+                  MonthlyEnergyChart(
+          data: _device.monthlyEnergyHistory,
+          isConnected: _isConnected,
+        ),
                 ],
               ),
             ),

@@ -176,9 +176,9 @@ class EnergyAnalysisSummary extends StatelessWidget {
                 if (changePercent != null)
                   _buildChangeBadge(changePercent, prevYear)
                 else
-                  Text(
-                    'Data tahun $prevYear tidak tersedia',
-                    style: const TextStyle(color: Colors.white38, fontSize: 7),
+                  const Text(
+                    'Belum ada data pembanding',
+                    style: TextStyle(color: Colors.white38, fontSize: 8),
                   ),
               ],
             ),

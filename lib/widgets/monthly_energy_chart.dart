@@ -3,8 +3,13 @@ import 'package:fl_chart/fl_chart.dart';
 
 class MonthlyEnergyChart extends StatelessWidget {
   final List<double> data;
+  final bool isConnected;
 
-  const MonthlyEnergyChart({super.key, required this.data});
+  const MonthlyEnergyChart({
+    super.key,
+    required this.data,
+    this.isConnected = true,
+  });
 
   static const List<String> _months = [
     'Jan',
@@ -178,19 +183,21 @@ class MonthlyEnergyChart extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.white10),
                       ),
-                      child: const Column(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.bar_chart_rounded, color: Colors.white38, size: 28),
-                          SizedBox(height: 6),
+                          const Icon(Icons.bar_chart_rounded, color: Colors.white38, size: 28),
+                          const SizedBox(height: 6),
                           Text(
-                            'Grafik bulanan belum tersedia',
-                            style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                            isConnected ? 'Belum ada rekaman histori' : 'Grafik bulanan belum tersedia',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
                           ),
-                          SizedBox(height: 2),
+                          const SizedBox(height: 2),
                           Text(
-                            'Hubungkan perangkat IoT untuk mulai menyinkronkan data.',
-                            style: TextStyle(color: Colors.white38, fontSize: 10),
+                            isConnected
+                                ? 'Data akumulasi bulanan akan tercatat otomatis saat tersimpan di database.'
+                                : 'Hubungkan perangkat IoT untuk mulai menyinkronkan data.',
+                            style: const TextStyle(color: Colors.white38, fontSize: 10),
                             textAlign: TextAlign.center,
                           ),
                         ],

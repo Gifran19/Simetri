@@ -11,9 +11,9 @@ class DeviceData {
 
   // Energy & PLN Specs
   final double dailyEnergy;
-  final double dailyCost;
+  final double? dailyCost;
   final double monthlyEnergy;
-  final double monthlyCost;
+  final double? monthlyCost;
   final double yearlyEnergy;
   final int powerLimitVa;
   final double monthlyBudgetRp;
@@ -39,9 +39,9 @@ class DeviceData {
     this.frequency = 50.0,
     this.powerFactor = 0.98,
     required this.dailyEnergy,
-    required this.dailyCost,
+    this.dailyCost,
     required this.monthlyEnergy,
-    required this.monthlyCost,
+    this.monthlyCost,
     required this.yearlyEnergy,
     this.powerLimitVa = 1300,
     this.monthlyBudgetRp = 300000,
@@ -66,9 +66,9 @@ class DeviceData {
       frequency: 0,
       powerFactor: 0,
       dailyEnergy: 0,
-      dailyCost: 0,
+      dailyCost: null,
       monthlyEnergy: 0,
-      monthlyCost: 0,
+      monthlyCost: null,
       yearlyEnergy: 0,
       powerLimitVa: 1300,
       monthlyBudgetRp: 300000,
@@ -93,8 +93,10 @@ class DeviceData {
     double? powerFactor,
     double? dailyEnergy,
     double? dailyCost,
+    bool resetDailyCost = false,
     double? monthlyEnergy,
     double? monthlyCost,
+    bool resetMonthlyCost = false,
     double? yearlyEnergy,
     int? powerLimitVa,
     double? monthlyBudgetRp,
@@ -116,9 +118,9 @@ class DeviceData {
       frequency: frequency ?? this.frequency,
       powerFactor: powerFactor ?? this.powerFactor,
       dailyEnergy: dailyEnergy ?? this.dailyEnergy,
-      dailyCost: dailyCost ?? this.dailyCost,
+      dailyCost: resetDailyCost ? null : (dailyCost ?? this.dailyCost),
       monthlyEnergy: monthlyEnergy ?? this.monthlyEnergy,
-      monthlyCost: monthlyCost ?? this.monthlyCost,
+      monthlyCost: resetMonthlyCost ? null : (monthlyCost ?? this.monthlyCost),
       yearlyEnergy: yearlyEnergy ?? this.yearlyEnergy,
       powerLimitVa: powerLimitVa ?? this.powerLimitVa,
       monthlyBudgetRp: monthlyBudgetRp ?? this.monthlyBudgetRp,

@@ -23,6 +23,8 @@ class SensorReading {
   final bool relayControlEnabled;// Apakah kontrol relay diizinkan di firmware
   final String? sensorError;     // Pesan error jika pembacaan gagal
   final double? appliedTariffPerKwh; // Tarif listrik aktif yang saat ini diterapkan di perangkat (Rp/kWh)
+  final double? dailyCost;       // Estimasi biaya harian yang dihitung perangkat (Rp)
+  final double? monthlyCost;     // Estimasi biaya bulanan yang dihitung perangkat (Rp)
 
   const SensorReading({
     required this.voltage,
@@ -44,6 +46,8 @@ class SensorReading {
     this.relayControlEnabled = false,
     this.sensorError,
     this.appliedTariffPerKwh,
+    this.dailyCost,
+    this.monthlyCost,
   });
 
   /// Placeholder kosong (belum ada data). Semua nilai nol dan ditandai tidak valid;
@@ -64,6 +68,8 @@ class SensorReading {
       isValid: false,
       isStale: true,
       sensorError: 'Belum ada data dari perangkat',
+      dailyCost: null,
+      monthlyCost: null,
     );
   }
 
@@ -146,6 +152,8 @@ class SensorReading {
       relayControlEnabled: parseBool(map['relay_control_enabled'], false),
       sensorError: map['sensor_error']?.toString() ?? (isValid ? null : 'Sensor tidak merespons'),
       appliedTariffPerKwh: parseNullableDouble(map['tariff_per_kwh'] ?? map['applied_tariff']),
+      dailyCost: parseNullableDouble(map['daily_cost'] ?? map['biaya_hari']),
+      monthlyCost: parseNullableDouble(map['monthly_cost'] ?? map['biaya_bulan']),
     );
   }
 
@@ -154,13 +162,15 @@ class SensorReading {
     return {
       'sensor_valid': isValid,
       'voltage': isValid ? double.parse(voltage.toStringAsFixed(1)) : null,
-      'current': isValid ? double.parse(current.toStringAsFixed(2)) : null,
+      'current': isValid ? double.parse(current.toStringAsFixed(3)) : null,
       'power': isValid ? double.parse(power.toStringAsFixed(1)) : null,
       'frequency': isValid ? double.parse(frequency.toStringAsFixed(1)) : null,
       'power_factor': isValid ? double.parse(powerFactor.toStringAsFixed(2)) : null,
       'energy_kwh': double.parse(energyKwh.toStringAsFixed(3)),
-      'daily_energy': double.parse(dailyEnergyKwh.toStringAsFixed(2)),
-      'monthly_energy': double.parse(monthlyEnergyKwh.toStringAsFixed(1)),
+      'daily_energy': double.parse(dailyEnergyKwh.toStringAsFixed(3)),
+      'monthly_energy': double.parse(monthlyEnergyKwh.toStringAsFixed(3)),
+      if (dailyCost != null) 'daily_cost': dailyCost,
+      if (monthlyCost != null) 'monthly_cost': monthlyCost,
       if (appliedTariffPerKwh != null) 'tariff_per_kwh': appliedTariffPerKwh,
       'relay_output_state': relayState,
       'relay_control_enabled': relayControlEnabled,

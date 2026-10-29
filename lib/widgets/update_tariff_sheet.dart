@@ -245,6 +245,30 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+
+                // Penjelasan dampak perubahan tarif terhadap perhitungan biaya
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amber.withValues(alpha: 0.25)),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.amber, size: 16),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Catatan: Tarif baru akan diterapkan perangkat untuk menghitung ulang seluruh estimasi biaya periode berjalan (biaya = kWh × tarif). Akumulasi energi fisik (kWh) tidak di-reset.',
+                          style: TextStyle(color: Colors.white70, fontSize: 11, height: 1.35),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 20),
 
                 // TOMBOL SIMPAN

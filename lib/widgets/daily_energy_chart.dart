@@ -16,7 +16,8 @@ class DailyEnergyChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final chartData = isConnected ? (data ?? _defaultData) : List<double>.filled(7, 0.0);
+    final bool isEmpty = data == null || data!.isEmpty || data!.every((e) => e == 0);
+    final chartData = isEmpty ? List<double>.filled(7, 0.0) : data!;
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -105,7 +106,7 @@ class DailyEnergyChart extends StatelessWidget {
                     }).toList(),
                   ),
                 ),
-                if (!isConnected)
+                if (!isConnected || isEmpty)
                   Center(
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -114,19 +115,21 @@ class DailyEnergyChart extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.white10),
                       ),
-                      child: const Column(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.query_stats_rounded, color: Colors.white38, size: 28),
-                          SizedBox(height: 6),
+                          const Icon(Icons.query_stats_rounded, color: Colors.white38, size: 28),
+                          const SizedBox(height: 6),
                           Text(
-                            'Grafik harian belum tersedia',
-                            style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                            isConnected ? 'Belum ada rekaman histori' : 'Grafik harian belum tersedia',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
                           ),
-                          SizedBox(height: 2),
+                          const SizedBox(height: 2),
                           Text(
-                            'Hubungkan perangkat IoT untuk memulai pencatatan.',
-                            style: TextStyle(color: Colors.white38, fontSize: 10),
+                            isConnected
+                                ? 'Data histori harian akan tercatat otomatis saat tersimpan di database.'
+                                : 'Hubungkan perangkat IoT untuk memulai pencatatan.',
+                            style: const TextStyle(color: Colors.white38, fontSize: 10),
                             textAlign: TextAlign.center,
                           ),
                         ],
