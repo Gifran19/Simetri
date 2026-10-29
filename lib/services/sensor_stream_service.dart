@@ -69,10 +69,20 @@ class SensorStreamService {
   String? streamError;
 
   StreamSubscription<DatabaseEvent>? _firebaseSub;
+  StreamSubscription<DatabaseEvent>? _controlSub;
   Timer? _statusTimer;
   Timer? _simulationTimer;
 
   bool _isStreamingActive = false;
+
+  /// Nilai tarif yang tersimpan di cloud (node control/tariff_per_kwh)
+  double? _targetControlTariff;
+  double? get targetControlTariff => _targetControlTariff;
+
+  /// Notifier status sinkronisasi tarif antara Cloud dan ESP32
+  final ValueNotifier<TariffSyncStatus> tariffSyncNotifier =
+      ValueNotifier<TariffSyncStatus>(TariffSyncStatus.noData);
+  TariffSyncStatus get tariffSyncStatus => tariffSyncNotifier.value;
 
   // Akumulator energi simulasi DEMO (kWh) - hanya dipakai di mode DEMO
   double _simDailyEnergy = 0.0;
@@ -125,6 +135,18 @@ class SensorStreamService {
     if (statusNotifier.value != next) {
       statusNotifier.value = next;
     }
+    _recomputeTariffSync();
+  }
+
+  void _recomputeTariffSync() {
+    final next = evaluateTariffSync(
+      controlTariff: _targetControlTariff,
+      appliedTariff: _latest?.appliedTariffPerKwh,
+      isDeviceReachable: status.deviceReachable,
+    );
+    if (tariffSyncNotifier.value != next) {
+      tariffSyncNotifier.value = next;
+    }
   }
 
   // -------------------------------------------------------------
@@ -158,6 +180,8 @@ class SensorStreamService {
     _isStreamingActive = false;
     _firebaseSub?.cancel();
     _firebaseSub = null;
+    _controlSub?.cancel();
+    _controlSub = null;
     _simulationTimer?.cancel();
     _simulationTimer = null;
     _statusTimer?.cancel();
@@ -170,6 +194,7 @@ class SensorStreamService {
 
   void _listenToFirebase(FirebaseDatabase db) {
     _firebaseSub?.cancel();
+    _controlSub?.cancel();
     streamError = null;
 
     try {
@@ -201,6 +226,25 @@ class SensorStreamService {
           _latest = null;
           streamError = 'Gagal membaca data perangkat: $error';
           _recompute();
+        },
+      );
+
+      // Listener node control untuk memantau perubahan tarif dan perintah cloud
+      final controlRef = db.ref(rtdbControlPath);
+      _controlSub = controlRef.onValue.listen(
+        (event) {
+          if (!_isStreamingActive) return;
+          final raw = event.snapshot.value;
+          if (event.snapshot.exists && raw is Map) {
+            final t = raw['tariff_per_kwh'];
+            if (t is num) {
+              _targetControlTariff = t.toDouble();
+              _recomputeTariffSync();
+            }
+          }
+        },
+        onError: (Object error) {
+          debugPrint('Firebase control stream error: $error');
         },
       );
     } catch (e) {
@@ -292,6 +336,45 @@ class SensorStreamService {
     } catch (e) {
       debugPrint('Relay command error: $e');
       return RelayWriteResult.failed;
+    }
+  }
+
+  // -------------------------------------------------------------
+  // PENGATURAN TARIF LISTRIK
+  // -------------------------------------------------------------
+
+  /// Menulis konfigurasi tarif listrik ke `devices/{id}/control/tariff_per_kwh`.
+  ///
+  /// Keberhasilan penulisan menandakan data tersimpan di Cloud.
+  /// ESP32 akan membaca dan mengonfirmasikannya melalui `devices/{id}/live/tariff_per_kwh`.
+  Future<TariffWriteResult> writeTariffCommand(double newTariff) async {
+    if (newTariff <= 0.0 || newTariff > 100000.0) {
+      return TariffWriteResult.invalidValue;
+    }
+    if (kDemoMode) return TariffWriteResult.demoNotSent;
+
+    final db = _db;
+    if (db == null) return TariffWriteResult.firebaseUnavailable;
+
+    _targetControlTariff = newTariff;
+    _recomputeTariffSync();
+
+    try {
+      await db.ref(rtdbControlPath).update({
+        'tariff_per_kwh': newTariff,
+        'updated_at': ServerValue.timestamp,
+      }).timeout(const Duration(seconds: 8));
+
+      return TariffWriteResult.written;
+    } on TimeoutException {
+      return TariffWriteResult.timedOut;
+    } on FirebaseException catch (e) {
+      debugPrint('Tariff command Firebase error: ${e.code}');
+      if (e.code == 'permission-denied') return TariffWriteResult.permissionDenied;
+      return TariffWriteResult.failed;
+    } catch (e) {
+      debugPrint('Tariff command error: $e');
+      return TariffWriteResult.failed;
     }
   }
 }

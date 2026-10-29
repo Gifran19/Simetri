@@ -3,17 +3,22 @@ import 'package:flutter/material.dart';
 import 'update_tariff_sheet.dart';
 import '../screens/tariff_history_screen.dart';
 import '../services/device_service.dart';
+import '../services/live_status.dart';
 
 class TariffCard extends StatelessWidget {
   final double tariff;
   final String activeDate;
   final Function(double, String, String) onTariffChanged;
+  final TariffSyncStatus syncStatus;
+  final double? appliedTariff;
 
   const TariffCard({
     super.key,
     required this.tariff,
     required this.activeDate,
     required this.onTariffChanged,
+    this.syncStatus = TariffSyncStatus.noData,
+    this.appliedTariff,
   });
 
   @override
@@ -65,6 +70,59 @@ class TariffCard extends StatelessWidget {
           Text(
             'Aktif sejak $activeDate',
             style: const TextStyle(color: Colors.white54, fontSize: 11),
+          ),
+          const SizedBox(height: 8),
+
+          // Badge status sinkronisasi Cloud vs Perangkat ESP32
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: syncStatus == TariffSyncStatus.synced
+                  ? const Color(0xff00D9A6).withValues(alpha: 0.15)
+                  : syncStatus == TariffSyncStatus.deviceOffline
+                      ? Colors.orange.withValues(alpha: 0.15)
+                      : Colors.blue.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: syncStatus == TariffSyncStatus.synced
+                    ? const Color(0xff00D9A6)
+                    : syncStatus == TariffSyncStatus.deviceOffline
+                        ? Colors.orange
+                        : Colors.blue,
+                width: 0.8,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  syncStatus == TariffSyncStatus.synced
+                      ? Icons.check_circle_outline
+                      : syncStatus == TariffSyncStatus.deviceOffline
+                          ? Icons.cloud_off_outlined
+                          : Icons.sync,
+                  size: 13,
+                  color: syncStatus == TariffSyncStatus.synced
+                      ? const Color(0xff00D9A6)
+                      : syncStatus == TariffSyncStatus.deviceOffline
+                          ? Colors.orangeAccent
+                          : Colors.lightBlueAccent,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  syncStatus.label,
+                  style: TextStyle(
+                    color: syncStatus == TariffSyncStatus.synced
+                        ? const Color(0xff00D9A6)
+                        : syncStatus == TariffSyncStatus.deviceOffline
+                            ? Colors.orangeAccent
+                            : Colors.lightBlueAccent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
 

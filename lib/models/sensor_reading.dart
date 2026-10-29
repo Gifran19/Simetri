@@ -22,6 +22,7 @@ class SensorReading {
   final bool? relayOutputState;  // Status output GPIO relay fisik
   final bool relayControlEnabled;// Apakah kontrol relay diizinkan di firmware
   final String? sensorError;     // Pesan error jika pembacaan gagal
+  final double? appliedTariffPerKwh; // Tarif listrik aktif yang saat ini diterapkan di perangkat (Rp/kWh)
 
   const SensorReading({
     required this.voltage,
@@ -42,6 +43,7 @@ class SensorReading {
     this.relayOutputState,
     this.relayControlEnabled = false,
     this.sensorError,
+    this.appliedTariffPerKwh,
   });
 
   /// Placeholder kosong (belum ada data). Semua nilai nol dan ditandai tidak valid;
@@ -143,6 +145,7 @@ class SensorReading {
       relayOutputState: (map['relay_output_state'] is bool) ? map['relay_output_state'] as bool : null,
       relayControlEnabled: parseBool(map['relay_control_enabled'], false),
       sensorError: map['sensor_error']?.toString() ?? (isValid ? null : 'Sensor tidak merespons'),
+      appliedTariffPerKwh: parseNullableDouble(map['tariff_per_kwh'] ?? map['applied_tariff']),
     );
   }
 
@@ -158,6 +161,7 @@ class SensorReading {
       'energy_kwh': double.parse(energyKwh.toStringAsFixed(3)),
       'daily_energy': double.parse(dailyEnergyKwh.toStringAsFixed(2)),
       'monthly_energy': double.parse(monthlyEnergyKwh.toStringAsFixed(1)),
+      if (appliedTariffPerKwh != null) 'tariff_per_kwh': appliedTariffPerKwh,
       'relay_output_state': relayState,
       'relay_control_enabled': relayControlEnabled,
       'timestamp': DateTime.now().millisecondsSinceEpoch,

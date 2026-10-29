@@ -165,9 +165,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (_isConnected) {
-        final currentTariff = DeviceService.currentTariff;
-        final double dailyCost = reading.dailyEnergyKwh * currentTariff;
-        final double monthlyCost = reading.monthlyEnergyKwh * currentTariff;
+        final effectiveTariff = reading.appliedTariffPerKwh ?? DeviceService.currentTariff;
+        final double dailyCost = reading.dailyEnergyKwh * effectiveTariff;
+        final double monthlyCost = reading.monthlyEnergyKwh * effectiveTariff;
 
         setState(() {
           _device = _device.copyWith(
@@ -409,6 +409,39 @@ class _HomeScreenState extends State<HomeScreen> {
         });
 
         _showNotification('Perintah terkirim ke server. Menunggu konfirmasi telemetri perangkat...');
+        break;
+    }
+  }
+
+  Future<void> _handleTariffChanged(double value, String date, String note) async {
+    final result = await DeviceService.updateTariffAsync(value, date, note);
+    if (!mounted) return;
+    setState(() {});
+
+    switch (result) {
+      case TariffWriteResult.synced:
+        _showNotification('Tarif Rp ${value.toInt()}/kWh berhasil diterapkan perangkat.');
+        break;
+      case TariffWriteResult.writtenToCloud:
+        _showNotification('Tarif disimpan di cloud. Menunggu konfirmasi perangkat...');
+        break;
+      case TariffWriteResult.deviceOffline:
+        _showNotification('Tarif disimpan di cloud. Perangkat offline, akan diterapkan saat online.');
+        break;
+      case TariffWriteResult.permissionDenied:
+        _showNotification('Gagal mengubah tarif: Izin ditolak oleh server Firebase.', isWarning: true);
+        break;
+      case TariffWriteResult.timedOut:
+        _showNotification('Gagal mengirim tarif: batas waktu habis.', isWarning: true);
+        break;
+      case TariffWriteResult.invalidValue:
+        _showNotification('Nilai tarif tidak valid (harus Rp 100 - Rp 50.000).', isWarning: true);
+        break;
+      case TariffWriteResult.firebaseUnavailable:
+        _showNotification('Firebase belum siap. Periksa koneksi internet.', isWarning: true);
+        break;
+      case TariffWriteResult.failed:
+        _showNotification('Gagal menyimpan tarif ke cloud.', isWarning: true);
         break;
     }
   }
@@ -795,12 +828,16 @@ class _HomeScreenState extends State<HomeScreen> {
         _buildStreamStatusBadge(),
         const SizedBox(height: 4),
 
-        TariffCard(
-          tariff: DeviceService.currentTariff,
-          activeDate: DeviceService.tariffActiveDate,
-          onTariffChanged: (value, date, note) {
-            DeviceService.updateTariff(value, date, note);
-            setState(() {});
+        ValueListenableBuilder<TariffSyncStatus>(
+          valueListenable: SensorStreamService.instance.tariffSyncNotifier,
+          builder: (context, syncStatus, _) {
+            return TariffCard(
+              tariff: DeviceService.currentTariff,
+              activeDate: DeviceService.tariffActiveDate,
+              syncStatus: syncStatus,
+              appliedTariff: _latestReading?.appliedTariffPerKwh,
+              onTariffChanged: _handleTariffChanged,
+            );
           },
         ),
         const SizedBox(height: 14),
@@ -830,7 +867,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ? _currencyFormatter.format(_device.dailyCost)
               : 'Rp --',
           badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
-          badgeRight: _isConnected ? 'Tarif Rp ${DeviceService.currentTariff.toInt()}/kWh' : 'Belum ada data',
+          badgeRight: _isConnected
+              ? 'Tarif Rp ${(_latestReading?.appliedTariffPerKwh ?? DeviceService.currentTariff).toInt()}/kWh'
+              : 'Belum ada data',
         ),
         const SizedBox(height: 14),
 
@@ -897,12 +936,16 @@ class _HomeScreenState extends State<HomeScreen> {
                   _buildStreamStatusBadge(),
                   const SizedBox(height: 6),
 
-                  TariffCard(
-                    tariff: DeviceService.currentTariff,
-                    activeDate: DeviceService.tariffActiveDate,
-                    onTariffChanged: (value, date, note) {
-                      DeviceService.updateTariff(value, date, note);
-                      setState(() {});
+                  ValueListenableBuilder<TariffSyncStatus>(
+                    valueListenable: SensorStreamService.instance.tariffSyncNotifier,
+                    builder: (context, syncStatus, _) {
+                      return TariffCard(
+                        tariff: DeviceService.currentTariff,
+                        activeDate: DeviceService.tariffActiveDate,
+                        syncStatus: syncStatus,
+                        appliedTariff: _latestReading?.appliedTariffPerKwh,
+                        onTariffChanged: _handleTariffChanged,
+                      );
                     },
                   ),
                   const SizedBox(height: 16),
@@ -938,7 +981,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ? _currencyFormatter.format(_device.dailyCost)
                         : 'Rp --',
                     badgeLeft: _isConnected ? _status.badge : 'Belum terhubung',
-                    badgeRight: _isConnected ? 'Tarif Rp ${DeviceService.currentTariff.toInt()}/kWh' : 'Belum ada data',
+                    badgeRight: _isConnected
+                        ? 'Tarif Rp ${(_latestReading?.appliedTariffPerKwh ?? DeviceService.currentTariff).toInt()}/kWh'
+                        : 'Belum ada data',
                   ),
                   const SizedBox(height: 16),
 

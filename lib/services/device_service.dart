@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/device_data.dart';
 import '../models/tariff_history.dart';
+import 'live_status.dart';
+import 'sensor_stream_service.dart';
 
 /// Preset Golongan Tarif Resmi PLN
 class PlnTariffPreset {
@@ -109,6 +111,16 @@ class DeviceService {
     currentTariff = newTariff;
     tariffActiveDate = date;
     tariffNote = note;
+  }
+
+  /// Memperbarui tarif secara lokal dan mengirimkannya ke Firebase Cloud control/tariff_per_kwh
+  static Future<TariffWriteResult> updateTariffAsync(
+    double newTariff,
+    String date,
+    String note,
+  ) async {
+    updateTariff(newTariff, date, note);
+    return await SensorStreamService.instance.writeTariffCommand(newTariff);
   }
 
   // =========================

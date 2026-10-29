@@ -154,3 +154,64 @@ enum RelayWriteResult {
   failed,
 }
 
+/// Status sinkronisasi tarif listrik antara aplikasi, cloud, dan ESP32.
+enum TariffSyncStatus {
+  /// Tarif tersinkronisasi: nilai yang dilaporkan perangkat (live) sama dengan nilai di cloud (control).
+  synced,
+
+  /// Tarif berhasil ditulis ke cloud (control), tetapi ESP32 belum melaporkan penerapan di (live).
+  pendingDevice,
+
+  /// Perangkat offline saat tarif baru diminta (akan diterapkan saat perangkat online kembali).
+  deviceOffline,
+
+  /// Data tarif belum tersedia dari perangkat atau cloud.
+  noData,
+}
+
+extension TariffSyncStatusX on TariffSyncStatus {
+  String get label {
+    switch (this) {
+      case TariffSyncStatus.synced:
+        return 'Diterapkan perangkat (Sinkron)';
+      case TariffSyncStatus.pendingDevice:
+        return 'Tersimpan di Cloud (Menunggu konfirmasi ESP32)';
+      case TariffSyncStatus.deviceOffline:
+        return 'Tersimpan di Cloud (ESP32 Offline)';
+      case TariffSyncStatus.noData:
+        return 'Belum tersinkronisasi';
+    }
+  }
+
+  bool get isConfirmed => this == TariffSyncStatus.synced;
+}
+
+/// Hasil penulisan perintah tarif ke Realtime Database.
+enum TariffWriteResult {
+  written,
+  demoNotSent,
+  firebaseUnavailable,
+  invalidValue,
+  permissionDenied,
+  timedOut,
+  failed,
+}
+
+/// Mengevaluasi status sinkronisasi tarif antara nilai di cloud dan nilai yang diterapkan ESP32.
+TariffSyncStatus evaluateTariffSync({
+  required double? controlTariff,
+  required double? appliedTariff,
+  required bool isDeviceReachable,
+}) {
+  if (controlTariff == null && appliedTariff == null) return TariffSyncStatus.noData;
+  if (appliedTariff != null && controlTariff != null) {
+    if ((appliedTariff - controlTariff).abs() < 0.05) {
+      return TariffSyncStatus.synced;
+    }
+  }
+  if (!isDeviceReachable) {
+    return TariffSyncStatus.deviceOffline;
+  }
+  return TariffSyncStatus.pendingDevice;
+}
+

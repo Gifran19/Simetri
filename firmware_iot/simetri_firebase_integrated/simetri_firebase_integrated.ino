@@ -652,7 +652,7 @@ String buildRtdbControlUrl() {
   url += String(EMULATOR_RTDB_PORT);
   url += "/devices/";
   url += DEVICE_ID;
-  url += "/control/power.json?ns=";
+  url += "/control.json?ns=";
   url += FIREBASE_RTDB_NAMESPACE;
   url += "&auth=";
   url += firebaseIdToken;
@@ -662,7 +662,7 @@ String buildRtdbControlUrl() {
   url += FIREBASE_HOST;
   url += "/devices/";
   url += DEVICE_ID;
-  url += "/control/power.json?auth=";
+  url += "/control.json?auth=";
   url += firebaseIdToken;
   return url;
 #endif
@@ -888,6 +888,7 @@ bool kirimTelemetriCloud() {
   doc["energy_kwh"]           = isnan(energyKwh) ? (float)0.0 : energyKwh;
   doc["daily_energy"]         = energiHari;
   doc["monthly_energy"]       = energiBulan;
+  doc["tariff_per_kwh"]       = tarifPerKwh;
 
   // Pemisahan status relay
   doc["requested_power"]      = requestedPower;
@@ -957,8 +958,30 @@ bool bacaKontrolCloud() {
     http.end();
     resp.trim();
 
-    // Validasi ketat boolean: respons null atau bukan boolean TIDAK boleh dianggap perintah OFF!
-    if (resp == "true") {
+    StaticJsonDocument<384> ctrlDoc;
+    DeserializationError err = deserializeJson(ctrlDoc, resp);
+
+    if (!err && ctrlDoc.is<JsonObject>()) {
+      // 1. Parsing status daya / relay
+      if (ctrlDoc.containsKey("power")) {
+        bool p = ctrlDoc["power"].as<bool>();
+        requestedPower = p;
+        setRelayOutput(p);
+      }
+      // 2. Parsing tarif listrik per kWh (validasi numerik positif dan masuk akal)
+      if (ctrlDoc.containsKey("tariff_per_kwh")) {
+        float newTariff = ctrlDoc["tariff_per_kwh"].as<float>();
+        if (!isnan(newTariff) && newTariff >= 100.0f && newTariff <= 50000.0f) {
+          if (fabs(tarifPerKwh - newTariff) > 0.01f) {
+            tarifPerKwh = newTariff;
+            Serial.printf("[CTRL] Tarif listrik baru diterapkan: Rp %.2f /kWh\n", tarifPerKwh);
+          }
+        } else {
+          Serial.printf("[CTRL] Nilai tarif tidak valid (%.2f) — diabaikan.\n", newTariff);
+        }
+      }
+      return true;
+    } else if (resp == "true") {
       requestedPower = true;
       Serial.println("[CTRL] Perintah daya diterima: ON (true)");
       setRelayOutput(true);
@@ -970,7 +993,7 @@ bool bacaKontrolCloud() {
       return true;
     } else {
       // Nilai adalah null, kosong, atau string lain: JANGAN ubah status relay!
-      Serial.printf("[CTRL] Nilai kontrol bukan boolean valid ('%s') — diabaikan.\n", resp.c_str());
+      Serial.printf("[CTRL] Nilai kontrol tidak dikenali ('%s') — diabaikan.\n", resp.c_str());
       return false;
     }
   } else if (httpCode == 401) {

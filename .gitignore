@@ -80,4 +80,5 @@ firmware_iot/*_backup/
 # FIRMWARE ESP32 – file secrets lokal (berisi kredensial nyata)
 # ============================================================
 firmware_iot/**/secrets.h
+firmware_iot/*.zip
 
