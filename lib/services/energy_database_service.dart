@@ -7,6 +7,7 @@ import '../firebase_options.dart';
 import '../models/yearly_energy_data.dart';
 import 'device_service.dart';
 import 'live_status.dart';
+import 'sensor_stream_service.dart';
 
 /// Service untuk mengambil dan menyimpan data energi ke Firebase Realtime Database.
 ///
@@ -78,6 +79,16 @@ class EnergyDatabaseService {
     if (deviceId != null && deviceId.trim().isNotEmpty) {
       return deviceId.trim();
     }
+    // Prioritaskan ID aktif dari SensorStreamService bila sudah diatur ke ID nyata
+    final streamId = SensorStreamService.instance.activeDeviceId;
+    if (streamId.isNotEmpty && streamId != DeviceService.defaultDeviceId) {
+      return streamId;
+    }
+    // Cek reactive notifier DeviceService
+    final notifierId = DeviceService.deviceIdNotifier.value;
+    if (notifierId.isNotEmpty && notifierId != DeviceService.defaultDeviceId) {
+      return notifierId;
+    }
     return await DeviceService.getPairedDeviceId();
   }
 
@@ -97,20 +108,39 @@ class EnergyDatabaseService {
           .get()
           .timeout(const Duration(seconds: 2));
 
-      if (!snapshot.exists || snapshot.value == null) {
-        return _defaultYears();
+      if (snapshot.exists && snapshot.value != null) {
+        final raw = snapshot.value;
+        if (raw is List) {
+          final list = raw.whereType<num>().map((e) => e.toInt()).toList()
+            ..sort((a, b) => b.compareTo(a)); // descending
+          if (list.isNotEmpty) return list;
+        } else if (raw is Map) {
+          final list = raw.values.whereType<num>().map((e) => e.toInt()).toList()
+            ..sort((a, b) => b.compareTo(a));
+          if (list.isNotEmpty) return list;
+        }
       }
 
-      final raw = snapshot.value;
-      if (raw is List) {
-        final list = raw.whereType<num>().map((e) => e.toInt()).toList()
-          ..sort((a, b) => b.compareTo(a)); // descending
-        return list.isNotEmpty ? list : _defaultYears();
-      } else if (raw is Map) {
-        final list = raw.values.whereType<num>().map((e) => e.toInt()).toList()
-          ..sort((a, b) => b.compareTo(a));
-        return list.isNotEmpty ? list : _defaultYears();
+      // Fallback: Jika node available_years belum ada, cek child keys di energy_data/$devId
+      final rootSnap = await db
+          .ref('energy_data/$devId')
+          .get()
+          .timeout(const Duration(seconds: 2));
+      if (rootSnap.exists && rootSnap.value is Map) {
+        final rootMap = rootSnap.value as Map;
+        final detectedYears = <int>[];
+        for (final k in rootMap.keys) {
+          final y = int.tryParse(k.toString());
+          if (y != null && y >= 2020 && y <= 2100) {
+            detectedYears.add(y);
+          }
+        }
+        if (detectedYears.isNotEmpty) {
+          detectedYears.sort((a, b) => b.compareTo(a));
+          return detectedYears;
+        }
       }
+
       return _defaultYears();
     } catch (e) {
       return _defaultYears();
@@ -134,7 +164,7 @@ class EnergyDatabaseService {
           .timeout(const Duration(seconds: 2));
       lastFetchError = null;
 
-      if (!snapshot.exists || snapshot.value == null) {
+      if (!snapshot.exists || snapshot.value == null || snapshot.value is! Map) {
         return _emptyOrDemo(year);
       }
 
@@ -147,7 +177,7 @@ class EnergyDatabaseService {
             .ref('energy_data/$devId/${year - 1}')
             .get()
             .timeout(const Duration(seconds: 1));
-        if (prevSnapshot.exists && prevSnapshot.value != null) {
+        if (prevSnapshot.exists && prevSnapshot.value != null && prevSnapshot.value is Map) {
           prevData = YearlyEnergyData.fromFirebase(
             year: year - 1,
             data: prevSnapshot.value as Map<dynamic, dynamic>,
@@ -177,7 +207,8 @@ class EnergyDatabaseService {
     final devId = await _resolveDeviceId(deviceId);
 
     yield* db.ref('energy_data/$devId/$year').onValue.asyncMap((event) async {
-      if (!event.snapshot.exists || event.snapshot.value == null) {
+      lastFetchError = null;
+      if (!event.snapshot.exists || event.snapshot.value == null || event.snapshot.value is! Map) {
         return _emptyOrDemo(year);
       }
       final data = event.snapshot.value as Map<dynamic, dynamic>;
@@ -188,7 +219,7 @@ class EnergyDatabaseService {
             .ref('energy_data/$devId/${year - 1}')
             .get()
             .timeout(const Duration(seconds: 1));
-        if (prevSnapshot.exists && prevSnapshot.value != null) {
+        if (prevSnapshot.exists && prevSnapshot.value != null && prevSnapshot.value is Map) {
           prevData = YearlyEnergyData.fromFirebase(
             year: year - 1,
             data: prevSnapshot.value as Map<dynamic, dynamic>,

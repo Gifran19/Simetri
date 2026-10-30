@@ -28,10 +28,52 @@ class MonthlyEnergyChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool isEmpty = data.isEmpty || data.every((e) => e == 0);
+    // Nilai valid jika ada minimal satu bulan > 0.00001 (tidak menganggap 0.002 sebagai kosong)
+    final bool isEmpty = data.isEmpty || data.every((e) => e <= 0.00001);
     final displayData = isEmpty ? List<double>.filled(12, 0.0) : data;
     final maxVal = isEmpty ? 100.0 : displayData.reduce((a, b) => a > b ? a : b);
-    final double maxY = maxVal > 150 ? ((maxVal / 20).ceil() * 20 + 20).toDouble() : 180.0;
+
+    // Hitung maxY dan interval dinamis agar data berapapun kecilnya (mis. 0.002 kWh)
+    // tetap proporsional dan barnya tampak jelas terlihat
+    final double maxY;
+    final double interval;
+    if (isEmpty || maxVal <= 0.0) {
+      maxY = 100.0;
+      interval = 20.0;
+    } else if (maxVal <= 0.005) {
+      maxY = 0.005;
+      interval = 0.001;
+    } else if (maxVal <= 0.01) {
+      maxY = 0.01;
+      interval = 0.002;
+    } else if (maxVal <= 0.05) {
+      maxY = 0.05;
+      interval = 0.01;
+    } else if (maxVal <= 0.1) {
+      maxY = 0.1;
+      interval = 0.02;
+    } else if (maxVal <= 0.5) {
+      maxY = 0.5;
+      interval = 0.1;
+    } else if (maxVal <= 1.0) {
+      maxY = 1.0;
+      interval = 0.2;
+    } else if (maxVal <= 5.0) {
+      maxY = 5.0;
+      interval = 1.0;
+    } else if (maxVal <= 10.0) {
+      maxY = 10.0;
+      interval = 2.0;
+    } else if (maxVal <= 50.0) {
+      maxY = 50.0;
+      interval = 10.0;
+    } else if (maxVal <= 150.0) {
+      maxY = 150.0;
+      interval = 30.0;
+    } else {
+      maxY = ((maxVal / 20).ceil() * 20 + 20).toDouble();
+      interval = 20.0;
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -94,7 +136,7 @@ class MonthlyEnergyChart extends StatelessWidget {
                       gridData: FlGridData(
                         show: true,
                         drawVerticalLine: false,
-                        horizontalInterval: 20,
+                        horizontalInterval: interval,
                         getDrawingHorizontalLine: (value) =>
                             FlLine(color: const Color(0xff2A4365), strokeWidth: 1.0),
                       ),
@@ -106,7 +148,7 @@ class MonthlyEnergyChart extends StatelessWidget {
                                 ? _months[group.x]
                                 : '';
                             return BarTooltipItem(
-                              '$monthName\n${rod.toY.toStringAsFixed(1)} kWh',
+                              '$monthName\n${rod.toY.toStringAsFixed(3)} kWh',
                               const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
@@ -122,11 +164,24 @@ class MonthlyEnergyChart extends StatelessWidget {
                         leftTitles: AxisTitles(
                           sideTitles: SideTitles(
                             showTitles: true,
-                            interval: 20,
-                            reservedSize: 32,
+                            interval: interval,
+                            reservedSize: maxY < 1.0 ? 44 : 32,
                             getTitlesWidget: (value, meta) {
+                              if (value < 0 || value > maxY + (interval * 0.1)) {
+                                return const SizedBox();
+                              }
+                              final String labelText;
+                              if (maxY <= 0.01) {
+                                labelText = value.toStringAsFixed(3);
+                              } else if (maxY <= 0.1) {
+                                labelText = value.toStringAsFixed(2);
+                              } else if (maxY <= 1.0) {
+                                labelText = value.toStringAsFixed(1);
+                              } else {
+                                labelText = value.toInt().toString();
+                              }
                               return Text(
-                                value.toInt().toString(),
+                                labelText,
                                 textAlign: TextAlign.right,
                                 style: const TextStyle(color: Colors.white70, fontSize: 10),
                               );

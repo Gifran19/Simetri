@@ -2,19 +2,20 @@
 ///
 /// Struktur data di Firebase:
 /// energy_data/
-///   {year}/               ← misal "2026"
-///     monthly_energy/
-///       "0": 62.5         ← Jan
-///       "1": 67.0         ← Feb
-///       ...
-///       "11": 75.0        ← Des
-///     monthly_cost/
-///       "0": 84490        ← Jan (Rp)
-///       ...
-///     summary/
-///       total_energy: 825.0
-///       total_cost: 1116300
-///       available_years: [2024, 2025, 2026]
+///   {deviceId}/
+///     {year}/               ← misal "2026"
+///       monthly_energy/
+///         "0": 62.5         ← Jan
+///         "1": 67.0         ← Feb
+///         ...
+///         "11": 75.0        ← Des
+///       monthly_cost/
+///         "0": 84490        ← Jan (Rp)
+///         ...
+///       summary/
+///         total_energy: 825.0
+///         total_cost: 1116300
+///         available_years: [2024, 2025, 2026]
 class YearlyEnergyData {
   final int year;
   final double totalEnergy;
@@ -44,6 +45,43 @@ class YearlyEnergyData {
     required this.monthlyCost,
   });
 
+  /// Apakah ada data pemakaian valid (> 0) dalam tahun ini
+  bool get hasValidData =>
+      totalEnergy > 0.0 ||
+      totalCost > 0.0 ||
+      monthlyEnergy.any((e) => e > 0.0) ||
+      monthlyCost.any((c) => c > 0.0);
+
+  /// Helper untuk mem-parsing snapshot bulanan baik dalam format List maupun Map
+  static List<double> _parseMonthlyList(dynamic raw) {
+    final result = List<double>.filled(12, 0.0);
+    if (raw == null) return result;
+    if (raw is List) {
+      for (int i = 0; i < raw.length && i < 12; i++) {
+        final val = raw[i];
+        if (val is num) {
+          result[i] = val.toDouble();
+        } else if (val is String) {
+          final parsed = double.tryParse(val);
+          if (parsed != null) result[i] = parsed;
+        }
+      }
+    } else if (raw is Map) {
+      raw.forEach((key, val) {
+        final idx = int.tryParse(key.toString());
+        if (idx != null && idx >= 0 && idx < 12) {
+          if (val is num) {
+            result[idx] = val.toDouble();
+          } else if (val is String) {
+            final parsed = double.tryParse(val);
+            if (parsed != null) result[idx] = parsed;
+          }
+        }
+      });
+    }
+    return result;
+  }
+
   /// Buat YearlyEnergyData dari snapshot Firebase Realtime Database.
   /// Gunakan [prevData] untuk menghitung persen perubahan dibanding tahun lalu.
   factory YearlyEnergyData.fromFirebase({
@@ -51,28 +89,36 @@ class YearlyEnergyData {
     required Map<dynamic, dynamic> data,
     YearlyEnergyData? prevData,
   }) {
-    // Parse monthly_energy (12 elemen, fill 0 jika tidak ada)
-    final rawEnergy = data['monthly_energy'] as Map<dynamic, dynamic>? ?? {};
-    final monthlyEnergy = List<double>.generate(12, (i) {
-      final val = rawEnergy[i.toString()] ?? rawEnergy[i] ?? 0;
-      return (val as num).toDouble();
-    });
+    // Parse monthly_energy (12 elemen, mendukung Map maupun List dari Firebase RTDB)
+    final monthlyEnergy = _parseMonthlyList(data['monthly_energy']);
 
-    // Parse monthly_cost (12 elemen, fill 0 jika tidak ada)
-    final rawCost = data['monthly_cost'] as Map<dynamic, dynamic>? ?? {};
-    final monthlyCost = List<double>.generate(12, (i) {
-      final val = rawCost[i.toString()] ?? rawCost[i] ?? 0;
-      return (val as num).toDouble();
-    });
+    // Parse monthly_cost (12 elemen, mendukung Map maupun List dari Firebase RTDB)
+    final monthlyCost = _parseMonthlyList(data['monthly_cost']);
 
     // Hitung summary dari data bulanan jika tidak tersedia di node summary
-    final summary = data['summary'] as Map<dynamic, dynamic>? ?? {};
+    final rawSummary = data['summary'];
+    double? totalEnergyFromSummary;
+    double? totalCostFromSummary;
+    if (rawSummary is Map) {
+      final te = rawSummary['total_energy'];
+      if (te is num) {
+        totalEnergyFromSummary = te.toDouble();
+      } else if (te is String) {
+        totalEnergyFromSummary = double.tryParse(te);
+      }
+
+      final tc = rawSummary['total_cost'];
+      if (tc is num) {
+        totalCostFromSummary = tc.toDouble();
+      } else if (tc is String) {
+        totalCostFromSummary = double.tryParse(tc);
+      }
+    }
+
     final totalEnergy =
-        ((summary['total_energy'] as num?)?.toDouble()) ??
-        monthlyEnergy.fold<double>(0.0, (a, b) => a + b);
+        totalEnergyFromSummary ?? monthlyEnergy.fold<double>(0.0, (a, b) => a + b);
     final totalCost =
-        ((summary['total_cost'] as num?)?.toDouble()) ??
-        monthlyCost.fold<double>(0.0, (a, b) => a + b);
+        totalCostFromSummary ?? monthlyCost.fold<double>(0.0, (a, b) => a + b);
     final avgEnergy = totalEnergy / 12;
 
     // Hitung persentase perubahan jika ada data tahun sebelumnya

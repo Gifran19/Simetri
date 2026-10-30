@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'home_screen.dart';
@@ -34,6 +35,8 @@ class _EnergyScreenState extends State<EnergyScreen> {
   bool _isConnected = false;
 
   bool _loadingData = false;
+  String? _fetchError;
+  StreamSubscription<YearlyEnergyData>? _yearlySub;
 
   @override
   void initState() {
@@ -42,12 +45,15 @@ class _EnergyScreenState extends State<EnergyScreen> {
     _loadAvailableYears();
     DeviceService.connectionNotifier.addListener(_onConnectionChanged);
     DeviceService.budgetNotifier.addListener(_onBudgetChanged);
+    DeviceService.deviceIdNotifier.addListener(_onDeviceIdChanged);
   }
 
   @override
   void dispose() {
+    _yearlySub?.cancel();
     DeviceService.connectionNotifier.removeListener(_onConnectionChanged);
     DeviceService.budgetNotifier.removeListener(_onBudgetChanged);
+    DeviceService.deviceIdNotifier.removeListener(_onDeviceIdChanged);
     super.dispose();
   }
 
@@ -57,14 +63,22 @@ class _EnergyScreenState extends State<EnergyScreen> {
       if (connected) {
         _loadAvailableYears();
       } else {
+        _yearlySub?.cancel();
+        _yearlySub = null;
         if (!mounted) return;
         setState(() {
           _isConnected = false;
           _yearData = YearlyEnergyData.empty(_selectedYear);
           _loadingData = false;
+          _fetchError = null;
         });
       }
     }
+  }
+
+  void _onDeviceIdChanged() {
+    if (!mounted) return;
+    _loadAvailableYears();
   }
 
   void _onBudgetChanged() {
@@ -82,19 +96,23 @@ class _EnergyScreenState extends State<EnergyScreen> {
   Future<void> _loadAvailableYears() async {
     final connected = await DeviceService.isDeviceConnected();
     final budget = await DeviceService.getMonthlyBudget();
+    final currentDevId = DeviceService.deviceIdNotifier.value;
 
     if (!connected) {
+      _yearlySub?.cancel();
+      _yearlySub = null;
       if (!mounted) return;
       setState(() {
         _isConnected = false;
         _monthlyBudget = budget;
         _yearData = YearlyEnergyData.empty(_selectedYear);
         _loadingData = false;
+        _fetchError = null;
       });
       return;
     }
 
-    final years = await _dbService.fetchAvailableYears();
+    final years = await _dbService.fetchAvailableYears(currentDevId);
     if (!mounted) return;
     setState(() {
       _isConnected = true;
@@ -104,32 +122,76 @@ class _EnergyScreenState extends State<EnergyScreen> {
         _selectedYear = years.first;
       }
     });
-    await _loadYearData(_selectedYear);
+    _loadYearData(_selectedYear);
   }
 
   // --------------------------------------------------------
-  // Muat data energi untuk tahun yang dipilih
+  // Muat data energi untuk tahun yang dipilih dan dengarkan stream real-time
   // --------------------------------------------------------
   Future<void> _loadYearData(int year) async {
     final connected = await DeviceService.isDeviceConnected();
     if (!connected) {
+      _yearlySub?.cancel();
+      _yearlySub = null;
       if (!mounted) return;
       setState(() {
         _isConnected = false;
         _yearData = YearlyEnergyData.empty(year);
         _loadingData = false;
+        _fetchError = null;
       });
       return;
     }
 
-    setState(() => _loadingData = true);
-    final data = await _dbService.fetchYearlyData(year);
-    if (!mounted) return;
+    _yearlySub?.cancel();
+    _yearlySub = null;
+
+    final currentDevId = DeviceService.deviceIdNotifier.value;
+
     setState(() {
-      _isConnected = true;
-      _yearData = data;
-      _loadingData = false;
+      _loadingData = true;
+      _fetchError = null;
     });
+
+    // 1. Initial direct fetch untuk respons instan
+    try {
+      final initialData = await _dbService.fetchYearlyData(year, currentDevId);
+      if (mounted) {
+        setState(() {
+          _isConnected = true;
+          _yearData = initialData;
+          _loadingData = false;
+          _fetchError = _dbService.lastFetchError;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadingData = false;
+          _fetchError = e.toString();
+        });
+      }
+    }
+
+    // 2. Real-time stream subscription agar halaman otomatis update saat data masuk
+    _yearlySub = _dbService.streamYearlyData(year, currentDevId).listen(
+      (streamData) {
+        if (!mounted) return;
+        setState(() {
+          _isConnected = true;
+          _yearData = streamData;
+          _loadingData = false;
+          _fetchError = null;
+        });
+      },
+      onError: (err) {
+        if (!mounted) return;
+        setState(() {
+          _loadingData = false;
+          _fetchError = err.toString();
+        });
+      },
+    );
   }
 
   // --------------------------------------------------------
@@ -397,6 +459,81 @@ class _EnergyScreenState extends State<EnergyScreen> {
     );
   }
 
+  Widget _buildErrorBanner() {
+    final err = _fetchError ?? '';
+    final isPermissionDenied = err.toLowerCase().contains('permission') ||
+        err.toLowerCase().contains('denied') ||
+        err.toLowerCase().contains('izin');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xff181C32),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isPermissionDenied ? Colors.redAccent.withValues(alpha: 0.7) : Colors.amber.withValues(alpha: 0.7),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: isPermissionDenied
+                  ? Colors.redAccent.withValues(alpha: 0.15)
+                  : Colors.amber.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isPermissionDenied ? Icons.lock_outline_rounded : Icons.warning_amber_rounded,
+              color: isPermissionDenied ? Colors.redAccent : Colors.amber,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isPermissionDenied ? 'Izin Akses Ditolak (Permission Denied)' : 'Gagal Memuat Data Histori',
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  isPermissionDenied
+                      ? 'Akun Anda belum terdaftar sebagai member aktif perangkat ini di Firebase Realtime Database.'
+                      : err,
+                  style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.3),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          ElevatedButton(
+            onPressed: () => _loadAvailableYears(),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xff00D9A6),
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Coba Lagi', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ==========================================
   // MOBILE LAYOUT
   // ==========================================
@@ -408,6 +545,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
         const SizedBox(height: 18),
 
         if (!_isConnected) _buildDisconnectedBanner(),
+        if (_isConnected && _fetchError != null) _buildErrorBanner(),
 
         // SUMMARY CARDS
         if (_loadingData)
@@ -462,6 +600,7 @@ class _EnergyScreenState extends State<EnergyScreen> {
         const SizedBox(height: 22),
 
         if (!_isConnected) _buildDisconnectedBanner(),
+        if (_isConnected && _fetchError != null) _buildErrorBanner(),
 
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,

@@ -24,16 +24,45 @@ class MonthlyCostChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Normalisasi: jika data dalam Rupiah penuh (> 1000, misal 83.824),
-    // konversikan ke satuan 'K' (ribu) agar sesuai dengan skala sumbu Y (0 - 180K)
-    final normalizedData = data.map((val) => val > 1000 ? val / 1000 : val).toList();
+    final bool isEmpty = data.isEmpty || data.every((e) => e <= 0.0);
+    final double maxCost = isEmpty ? 0.0 : data.reduce((a, b) => a > b ? a : b);
 
-    // Hitung maxY dinamis agar bar selalu proporsional dan tidak pernah overflow
-    final maxVal = normalizedData.isEmpty ? 100.0 : normalizedData.reduce((a, b) => a > b ? a : b);
-    final double maxY = maxVal > 150 ? ((maxVal / 20).ceil() * 20 + 20).toDouble() : 180.0;
-    final double interval = maxY > 200 ? 50.0 : 20.0;
+    // Jika biaya tahunan sudah mencapai ribuan (>= 1.000), gunakan skala 'K' (ribu)
+    // Jika biaya masih kecil (misal Rp 3), gunakan skala Rupiah langsung tanpa membagi 1000
+    final bool useRibuan = maxCost >= 1000.0;
+    final normalizedData = data.map((val) => useRibuan ? val / 1000.0 : val).toList();
 
-    final bool isEmpty = normalizedData.isEmpty || normalizedData.every((e) => e == 0);
+    // Hitung maxY dan interval dinamis
+    final double maxY;
+    final double interval;
+    if (isEmpty || maxCost <= 0.0) {
+      maxY = 100.0;
+      interval = 20.0;
+    } else if (!useRibuan) {
+      if (maxCost <= 5.0) {
+        maxY = 5.0;
+        interval = 1.0;
+      } else if (maxCost <= 10.0) {
+        maxY = 10.0;
+        interval = 2.0;
+      } else if (maxCost <= 50.0) {
+        maxY = 50.0;
+        interval = 10.0;
+      } else if (maxCost <= 100.0) {
+        maxY = 100.0;
+        interval = 20.0;
+      } else if (maxCost <= 500.0) {
+        maxY = 500.0;
+        interval = 100.0;
+      } else {
+        maxY = 1000.0;
+        interval = 200.0;
+      }
+    } else {
+      final normMax = maxCost / 1000.0;
+      maxY = normMax > 150 ? ((normMax / 20).ceil() * 20 + 20).toDouble() : 180.0;
+      interval = maxY > 200 ? 50.0 : 20.0;
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -78,7 +107,10 @@ class MonthlyCostChart extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          const Text('Rp (dalam ribuan)', style: TextStyle(color: Colors.white70, fontSize: 11)),
+          Text(
+            useRibuan ? 'Rp (dalam ribuan)' : 'Rupiah (Rp)',
+            style: const TextStyle(color: Colors.white70, fontSize: 11),
+          ),
           const SizedBox(height: 12),
 
           // Bar Chart with ClipRect to prevent bar bleeding
@@ -99,13 +131,16 @@ class MonthlyCostChart extends StatelessWidget {
                         FlLine(color: const Color(0xff2A4365), strokeWidth: 1.0),
                   ),
                   barTouchData: BarTouchData(
-                    enabled: true,
+                    enabled: !isEmpty,
                     touchTooltipData: BarTouchTooltipData(
                       getTooltipItem: (group, groupIndex, rod, rodIndex) {
                         final monthName = (group.x >= 0 && group.x < _months.length)
                             ? _months[group.x]
                             : '';
-                        final actualCost = (rod.toY * 1000).toInt();
+                        // Ambil biaya riil dari data asli
+                        final actualCost = (group.x >= 0 && group.x < data.length)
+                            ? data[group.x].round()
+                            : (rod.toY * (useRibuan ? 1000 : 1)).round();
                         final formatted = NumberFormat('#,###', 'id_ID').format(actualCost);
                         return BarTooltipItem(
                           '$monthName\nRp $formatted',
@@ -125,10 +160,15 @@ class MonthlyCostChart extends StatelessWidget {
                       sideTitles: SideTitles(
                         showTitles: true,
                         interval: interval,
-                        reservedSize: 38,
+                        reservedSize: useRibuan ? 38 : 34,
                         getTitlesWidget: (value, meta) {
+                          if (value < 0 || value > maxY + (interval * 0.1)) {
+                            return const SizedBox();
+                          }
                           final valInt = value.toInt();
-                          final text = valInt == 0 ? '0' : '${valInt}K';
+                          final text = useRibuan
+                              ? (valInt == 0 ? '0' : '${valInt}K')
+                              : valInt.toString();
                           return Text(
                             text,
                             textAlign: TextAlign.right,
@@ -162,11 +202,15 @@ class MonthlyCostChart extends StatelessWidget {
                           toY: entry.value,
                           width: 11,
                           borderRadius: BorderRadius.circular(4),
-                          gradient: const LinearGradient(
-                            colors: [Color(0xff00D9A6), Color(0xff007BFF)],
-                            begin: Alignment.bottomCenter,
-                            end: Alignment.topCenter,
-                          ),
+                          gradient: !isEmpty && entry.value > 0
+                              ? const LinearGradient(
+                                  colors: [Color(0xff00D9A6), Color(0xff007BFF)],
+                                  begin: Alignment.bottomCenter,
+                                  end: Alignment.topCenter,
+                                )
+                              : const LinearGradient(
+                                  colors: [Colors.white10, Colors.white12],
+                                ),
                         ),
                       ],
                     );
