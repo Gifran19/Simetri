@@ -160,12 +160,33 @@ int  kalenderTahun                  = 0;
 int  kalenderBulan                  = -1; // 0..11
 int  kalenderHari                   = 0;  // 1..31
 int  kalenderHariMinggu             = 0;  // 0=Senin .. 6=Minggu
+char kalenderTanggalStr[16]         = ""; // "YYYY-MM-DD"
 bool waktuKalenderValid             = false;
 
 float energyAwalHari                = NAN;
 float energyAwalBulan               = NAN;
 float energiHari                    = 0.0f;
 float energiBulan                   = 0.0f;
+
+// Antrean periode selesai yang menunggu sinkronisasi cloud (Pending Queue NVS)
+char  pendingDayDate[16]            = "";
+int   pendingDayYear                = 0;
+float pendingDayKwh                 = 0.0f;
+float pendingDayCost                = 0.0f;
+int   pendingDayWday                = 0;
+bool  hasPendingDay                 = false;
+
+int   pendingMonthYear              = 0;
+int   pendingMonthIdx               = -1;
+float pendingMonthKwh               = 0.0f;
+float pendingMonthCost              = 0.0f;
+bool  hasPendingMonth               = false;
+
+// Cache bulanan 0..11 untuk akumulasi summary tahunan nyata
+float energiBulanCached[12]         = {0.0f};
+float biayaBulanCached[12]          = {0.0f};
+bool  monthlyCacheLoaded            = false;
+int   tahunTerdaftarDiCloud         = 0;
 
 // ============================================================
 //  HALAMAN LCD & NAVIGASI
@@ -243,12 +264,15 @@ bool kirimTelemetriCloud();
 bool kirimHistoriCloud();
 bool bacaKontrolCloud();
 bool periksaWaktuKalender();
+bool pastikanTahunTerdaftar();
+bool muatRiwayatBulananDariCloud();
 
 String buildAuthUrl();
 String buildRefreshUrl();
 String buildRtdbLiveUrl();
 String buildRtdbControlUrl();
 String buildRtdbEnergyUrl();
+String buildRtdbAvailableYearsUrl();
 
 // ============================================================
 //  SETUP
@@ -300,6 +324,38 @@ void setup() {
     kalenderBulan   = savedMon;
     kalenderTahun   = savedYear;
     Serial.printf("[NVS] Restore baseline bulanan: %.4f kWh (Bln: %d, Thn: %d)\n", energyAwalBulan, savedMon + 1, savedYear);
+  }
+
+  // Restore antrean pending sync periode selesai jika ada rollover saat offline sebelumnya
+  hasPendingDay = energyPrefs.getBool("p_day_pend", false);
+  if (hasPendingDay) {
+    String sDate = energyPrefs.getString("p_day_date", "");
+    strncpy(pendingDayDate, sDate.c_str(), sizeof(pendingDayDate) - 1);
+    pendingDayYear = energyPrefs.getInt("p_day_year", 0);
+    pendingDayKwh  = energyPrefs.getFloat("p_day_kwh", 0.0f);
+    pendingDayCost = energyPrefs.getFloat("p_day_cost", 0.0f);
+    pendingDayWday = energyPrefs.getInt("p_day_wday", 0);
+    Serial.printf("[NVS] Restore pending completed day: %s (%.3f kWh, Rp %.0f)\n",
+      pendingDayDate, pendingDayKwh, pendingDayCost);
+  }
+
+  hasPendingMonth = energyPrefs.getBool("p_mon_pend", false);
+  if (hasPendingMonth) {
+    pendingMonthYear = energyPrefs.getInt("p_mon_year", 0);
+    pendingMonthIdx  = energyPrefs.getInt("p_mon_idx", -1);
+    pendingMonthKwh  = energyPrefs.getFloat("p_mon_kwh", 0.0f);
+    pendingMonthCost = energyPrefs.getFloat("p_mon_cost", 0.0f);
+    Serial.printf("[NVS] Restore pending completed month: Thn %d Bln %d (%.3f kWh, Rp %.0f)\n",
+      pendingMonthYear, pendingMonthIdx + 1, pendingMonthKwh, pendingMonthCost);
+  }
+
+  // Restore cache bulanan 0..11 untuk akumulasi summary tahunan
+  for (int m = 0; m < 12; m++) {
+    char kE[16], kC[16];
+    snprintf(kE, sizeof(kE), "m_kwh_%d", m);
+    snprintf(kC, sizeof(kC), "m_cost_%d", m);
+    energiBulanCached[m] = energyPrefs.getFloat(kE, 0.0f);
+    biayaBulanCached[m]  = energyPrefs.getFloat(kC, 0.0f);
   }
 
   // Baca energi awal PZEM
@@ -750,6 +806,30 @@ String buildRtdbEnergyUrl() {
 #endif
 }
 
+String buildRtdbAvailableYearsUrl() {
+#if USE_FIREBASE_EMULATOR
+  String url = "http://";
+  url += EMULATOR_HOST;
+  url += ":";
+  url += String(EMULATOR_RTDB_PORT);
+  url += "/energy_data/";
+  url += DEVICE_ID;
+  url += "/available_years.json?ns=";
+  url += FIREBASE_RTDB_NAMESPACE;
+  url += "&auth=";
+  url += firebaseIdToken;
+  return url;
+#else
+  String url = "https://";
+  url += FIREBASE_HOST;
+  url += "/energy_data/";
+  url += DEVICE_ID;
+  url += "/available_years.json?auth=";
+  url += firebaseIdToken;
+  return url;
+#endif
+}
+
 // ============================================================
 //  AUTENTIKASI FIREBASE (LOGIN EMAIL / PASSWORD)
 // ============================================================
@@ -1121,60 +1201,290 @@ bool periksaWaktuKalender() {
     kalenderBulan = bulan;
     kalenderHari  = hari;
     kalenderHariMinggu = hariM;
+    snprintf(kalenderTanggalStr, sizeof(kalenderTanggalStr), "%04d-%02d-%02d", tahun, bulan + 1, hari);
 
     int savedYear = energyPrefs.getInt("cal_year", 0);
     int savedMon  = energyPrefs.getInt("cal_mon", -1);
     int savedDay  = energyPrefs.getInt("cal_day", 0);
 
-    if (savedYear != tahun || savedMon != bulan || savedDay != hari) {
-      Serial.printf("[KALENDER] Tanggal berganti sejak offline/reboot: %04d-%02d-%02d -> %04d-%02d-%02d\n",
-        savedYear, savedMon + 1, savedDay, tahun, bulan + 1, hari);
+    // Cek apakah tanggal saat ini berbeda dari tanggal NVS (restart setelah ganti hari/bulan saat offline)
+    if (savedYear > 0 && (savedYear != tahun || savedMon != bulan || savedDay != hari)) {
+      Serial.printf("[KALENDER] Tanggal berganti saat restart/offline: %04d-%02d-%02d -> %s\n",
+        savedYear, savedMon + 1, savedDay, kalenderTanggalStr);
+
+      if (!isnan(energyAwalHari) && !isnan(energyKwh)) {
+        float lastDayKwh = max(0.0f, energyKwh - energyAwalHari);
+        float lastDayCost = (float)roundf(lastDayKwh * tarifPerKwh);
+
+        snprintf(pendingDayDate, sizeof(pendingDayDate), "%04d-%02d-%02d", savedYear, savedMon + 1, savedDay);
+        pendingDayYear = savedYear;
+        pendingDayKwh  = lastDayKwh;
+        pendingDayCost = lastDayCost;
+        pendingDayWday = (timeinfo.tm_wday + 5) % 7;
+        hasPendingDay  = true;
+
+        energyPrefs.putString("p_day_date", pendingDayDate);
+        energyPrefs.putInt("p_day_year", pendingDayYear);
+        energyPrefs.putFloat("p_day_kwh", pendingDayKwh);
+        energyPrefs.putFloat("p_day_cost", pendingDayCost);
+        energyPrefs.putInt("p_day_wday", pendingDayWday);
+        energyPrefs.putBool("p_day_pend", true);
+      }
 
       if (!isnan(energyKwh)) {
         energyAwalHari = energyKwh;
+        energiHari     = 0.0f;
         energyPrefs.putFloat("e_start_day", energyAwalHari);
         energyPrefs.putInt("cal_day", hari);
 
         if (savedYear != tahun || savedMon != bulan) {
           energyAwalBulan = energyKwh;
+          energiBulan     = 0.0f;
           energyPrefs.putFloat("e_start_mon", energyAwalBulan);
           energyPrefs.putInt("cal_mon", bulan);
           energyPrefs.putInt("cal_year", tahun);
         }
       }
     } else {
-      Serial.printf("[KALENDER] Tanggal kalender sinkron dengan NVS: %04d-%02d-%02d (Wday %d)\n",
-        tahun, bulan + 1, hari, hariM);
+      Serial.printf("[KALENDER] Tanggal kalender sinkron dengan NVS: %s (Wday %d)\n", kalenderTanggalStr, hariM);
     }
     return true;
   }
 
-  // Cek apakah tanggal kalender berganti (rollover tengah malam 00:00 WIB)
+  // Cek apakah tanggal kalender berganti (rollover tengah malam 00:00 WIB saat modul aktif)
   if (hari != kalenderHari || bulan != kalenderBulan || tahun != kalenderTahun) {
-    Serial.printf("[KALENDER] Rollover hari terdeteksi: %02d/%02d/%04d -> %02d/%02d/%04d\n",
-      kalenderHari, kalenderBulan + 1, kalenderTahun, hari, bulan + 1, tahun);
+    Serial.printf("[KALENDER] Rollover hari terdeteksi: %s -> %04d-%02d-%02d\n",
+      kalenderTanggalStr, tahun, bulan + 1, hari);
 
     if (!isnan(energyKwh)) {
-      energyAwalHari = energyKwh;
-      energyPrefs.putFloat("e_start_day", energyAwalHari);
-      energyPrefs.putInt("cal_day", hari);
+      // Simpan hari yang selesai ke antrean pending
+      snprintf(pendingDayDate, sizeof(pendingDayDate), "%04d-%02d-%02d", kalenderTahun, kalenderBulan + 1, kalenderHari);
+      pendingDayYear = kalenderTahun;
+      pendingDayKwh  = energiHari;
+      pendingDayCost = (float)roundf(energiHari * tarifPerKwh);
+      pendingDayWday = kalenderHariMinggu;
+      hasPendingDay  = true;
 
+      energyPrefs.putString("p_day_date", pendingDayDate);
+      energyPrefs.putInt("p_day_year", pendingDayYear);
+      energyPrefs.putFloat("p_day_kwh", pendingDayKwh);
+      energyPrefs.putFloat("p_day_cost", pendingDayCost);
+      energyPrefs.putInt("p_day_wday", pendingDayWday);
+      energyPrefs.putBool("p_day_pend", true);
+
+      // Jika bulan juga berganti
       if (bulan != kalenderBulan || tahun != kalenderTahun) {
         Serial.printf("[KALENDER] Rollover bulan terdeteksi: %02d -> %02d\n", kalenderBulan + 1, bulan + 1);
+        pendingMonthYear = kalenderTahun;
+        pendingMonthIdx  = kalenderBulan;
+        pendingMonthKwh  = energiBulan;
+        pendingMonthCost = (float)roundf(energiBulan * tarifPerKwh);
+        hasPendingMonth  = true;
+
+        energyPrefs.putInt("p_mon_year", pendingMonthYear);
+        energyPrefs.putInt("p_mon_idx", pendingMonthIdx);
+        energyPrefs.putFloat("p_mon_kwh", pendingMonthKwh);
+        energyPrefs.putFloat("p_mon_cost", pendingMonthCost);
+        energyPrefs.putBool("p_mon_pend", true);
+
+        // Catat ke cache bulanan tahunan
+        energiBulanCached[kalenderBulan] = pendingMonthKwh;
+        biayaBulanCached[kalenderBulan]  = pendingMonthCost;
+        char kE[16], kC[16];
+        snprintf(kE, sizeof(kE), "m_kwh_%d", kalenderBulan);
+        snprintf(kC, sizeof(kC), "m_cost_%d", kalenderBulan);
+        energyPrefs.putFloat(kE, pendingMonthKwh);
+        energyPrefs.putFloat(kC, pendingMonthCost);
+
+        // Reset baseline bulan baru
         energyAwalBulan = energyKwh;
+        energiBulan     = 0.0f;
         energyPrefs.putFloat("e_start_mon", energyAwalBulan);
         energyPrefs.putInt("cal_mon", bulan);
         energyPrefs.putInt("cal_year", tahun);
+
+        // Jika tahun berganti, reset cache bulanan untuk tahun baru
+        if (tahun != kalenderTahun) {
+          for (int m = 0; m < 12; m++) {
+            energiBulanCached[m] = 0.0f;
+            biayaBulanCached[m]  = 0.0f;
+            char ckE[16], ckC[16];
+            snprintf(ckE, sizeof(ckE), "m_kwh_%d", m);
+            snprintf(ckC, sizeof(ckC), "m_cost_%d", m);
+            energyPrefs.putFloat(ckE, 0.0f);
+            energyPrefs.putFloat(ckC, 0.0f);
+          }
+          tahunTerdaftarDiCloud = 0;
+        }
       }
+
+      // Reset baseline hari baru
+      energyAwalHari = energyKwh;
+      energiHari     = 0.0f;
+      energyPrefs.putFloat("e_start_day", energyAwalHari);
+      energyPrefs.putInt("cal_day", hari);
     }
 
     kalenderTahun = tahun;
     kalenderBulan = bulan;
     kalenderHari  = hari;
     kalenderHariMinggu = hariM;
+    snprintf(kalenderTanggalStr, sizeof(kalenderTanggalStr), "%04d-%02d-%02d", tahun, bulan + 1, hari);
+    energyPrefs.putString("cal_date", kalenderTanggalStr);
   }
 
   return true;
+}
+
+// ============================================================
+//  PENDAFTARAN TAHUN KE AVAILABLE_YEARS SECARA NON-DESTRUKTIF
+// ============================================================
+
+bool pastikanTahunTerdaftar() {
+  if (tahunTerdaftarDiCloud == kalenderTahun) return true;
+  if (firebaseIdToken.isEmpty() || kalenderTahun < 2024) return false;
+
+  String url = buildRtdbAvailableYearsUrl();
+  HTTPClient http;
+  http.setTimeout(NETWORK_TIMEOUT_MS);
+
+#if USE_FIREBASE_EMULATOR
+  WiFiClient plainClient;
+  if (!http.begin(plainClient, url)) return false;
+#else
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(GOOGLE_ROOT_CA);
+  if (!http.begin(secureClient, url)) return false;
+#endif
+
+  int httpCode = http.GET();
+  bool sudahAda = false;
+  int daftarTahun[10];
+  int countTahun = 0;
+
+  if (httpCode == 200) {
+    String resp = http.getString();
+    http.end();
+    resp.trim();
+    DynamicJsonDocument doc(512);
+    if (deserializeJson(doc, resp) == DeserializationError::Ok) {
+      if (doc.is<JsonArray>()) {
+        for (JsonVariant v : doc.as<JsonArray>()) {
+          int y = v.as<int>();
+          if (y > 2000 && countTahun < 10) {
+            daftarTahun[countTahun++] = y;
+            if (y == kalenderTahun) sudahAda = true;
+          }
+        }
+      } else if (doc.is<JsonObject>()) {
+        for (JsonPair kv : doc.as<JsonObject>()) {
+          int y = kv.value().as<int>();
+          if (y > 2000 && countTahun < 10) {
+            daftarTahun[countTahun++] = y;
+            if (y == kalenderTahun) sudahAda = true;
+          }
+        }
+      }
+    }
+  } else {
+    http.end();
+  }
+
+  if (sudahAda) {
+    tahunTerdaftarDiCloud = kalenderTahun;
+    return true;
+  }
+
+  if (countTahun < 10) {
+    daftarTahun[countTahun++] = kalenderTahun;
+  }
+
+  // Urutkan tahun secara descending
+  for (int i = 0; i < countTahun - 1; i++) {
+    for (int j = i + 1; j < countTahun; j++) {
+      if (daftarTahun[i] < daftarTahun[j]) {
+        int tmp = daftarTahun[i];
+        daftarTahun[i] = daftarTahun[j];
+        daftarTahun[j] = tmp;
+      }
+    }
+  }
+
+  DynamicJsonDocument putDoc(512);
+  JsonArray arr = putDoc.to<JsonArray>();
+  for (int i = 0; i < countTahun; i++) {
+    arr.add(daftarTahun[i]);
+  }
+  String putPayload;
+  serializeJson(arr, putPayload);
+
+  HTTPClient putHttp;
+  putHttp.setTimeout(NETWORK_TIMEOUT_MS);
+#if USE_FIREBASE_EMULATOR
+  WiFiClient plainClient2;
+  if (!putHttp.begin(plainClient2, url)) return false;
+#else
+  WiFiClientSecure secureClient2;
+  secureClient2.setCACert(GOOGLE_ROOT_CA);
+  if (!putHttp.begin(secureClient2, url)) return false;
+#endif
+  putHttp.addHeader("Content-Type", "application/json");
+  int putCode = putHttp.PUT(putPayload);
+  putHttp.end();
+
+  if (putCode == 200 || putCode == 204) {
+    tahunTerdaftarDiCloud = kalenderTahun;
+    Serial.printf("[HISTORI] Tahun %d berhasil digabungkan ke available_years (total %d tahun)\n",
+      kalenderTahun, countTahun);
+    return true;
+  }
+  return false;
+}
+
+// ============================================================
+//  MUAT RIWAYAT BULANAN TAHUN INI DARI CLOUD (SATU KALI DI AWAL)
+// ============================================================
+
+bool muatRiwayatBulananDariCloud() {
+  if (monthlyCacheLoaded || firebaseIdToken.isEmpty() || kalenderTahun < 2024) return true;
+
+  String url = "https://" + String(FIREBASE_HOST) + "/energy_data/" + String(DEVICE_ID) + "/" + String(kalenderTahun) + "/monthly_energy.json?auth=" + firebaseIdToken;
+#if USE_FIREBASE_EMULATOR
+  url = "http://" + String(EMULATOR_HOST) + ":" + String(EMULATOR_RTDB_PORT) + "/energy_data/" + String(DEVICE_ID) + "/" + String(kalenderTahun) + "/monthly_energy.json?ns=" + String(FIREBASE_RTDB_NAMESPACE) + "&auth=" + firebaseIdToken;
+#endif
+
+  HTTPClient http;
+  http.setTimeout(NETWORK_TIMEOUT_MS);
+#if USE_FIREBASE_EMULATOR
+  WiFiClient plainClient;
+  if (!http.begin(plainClient, url)) return false;
+#else
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(GOOGLE_ROOT_CA);
+  if (!http.begin(secureClient, url)) return false;
+#endif
+
+  int code = http.GET();
+  if (code == 200) {
+    String resp = http.getString();
+    http.end();
+    DynamicJsonDocument doc(512);
+    if (deserializeJson(doc, resp) == DeserializationError::Ok) {
+      if (doc.is<JsonObject>()) {
+        for (JsonPair kv : doc.as<JsonObject>()) {
+          int m = atoi(kv.key().c_str());
+          if (m >= 0 && m < 12 && m != kalenderBulan) {
+            energiBulanCached[m] = kv.value().as<float>();
+          }
+        }
+      }
+    }
+    monthlyCacheLoaded = true;
+    Serial.println("[HISTORI] Riwayat energi bulanan tahunan tersinkronisasi dari RTDB.");
+    return true;
+  }
+  http.end();
+  return false;
 }
 
 // ============================================================
@@ -1184,6 +1494,14 @@ bool periksaWaktuKalender() {
 bool kirimHistoriCloud() {
   if (firebaseIdToken.isEmpty() || !waktuKalenderValid || kalenderTahun < 2024 || isnan(energyKwh)) {
     return false;
+  }
+
+  // Pastikan tahun terdaftar secara non-destruktif
+  pastikanTahunTerdaftar();
+
+  // Muat riwayat bulanan tahun ini dari cloud jika belum ada di cache
+  if (!monthlyCacheLoaded) {
+    muatRiwayatBulananDariCloud();
   }
 
   String url = buildRtdbEnergyUrl();
@@ -1201,38 +1519,70 @@ bool kirimHistoriCloud() {
 
   http.addHeader("Content-Type", "application/json");
 
-  float dailyCost = (float)roundf(energiHari * tarifPerKwh);
+  float dailyCost   = (float)roundf(energiHari * tarifPerKwh);
   float monthlyCost = (float)roundf(energiBulan * tarifPerKwh);
 
-  DynamicJsonDocument doc(768);
+  energiBulanCached[kalenderBulan] = energiBulan;
+  biayaBulanCached[kalenderBulan]  = monthlyCost;
 
-  // Daftarkan tahun saat ini ke available_years
-  JsonArray yearsArr = doc.createNestedArray("available_years");
-  yearsArr.add(kalenderTahun);
+  // Summary tahunan: hitung seluruh bulan yang tersedia di tahun berjalan
+  float totalTahunEnergi = 0.0f;
+  float totalTahunBiaya  = 0.0f;
+  for (int m = 0; m < 12; m++) {
+    totalTahunEnergi += energiBulanCached[m];
+    totalTahunBiaya  += biayaBulanCached[m];
+  }
 
-  char keyBuf[64];
+  DynamicJsonDocument doc(1024);
+  char keyBuf[80];
 
-  snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", kalenderTahun, kalenderBulan);
-  doc[keyBuf] = energiBulan;
+  // A. Arsip Harian Permanen (format tanggal lengkap YYYY-MM-DD)
+  snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/energy_kwh", kalenderTahun, kalenderTanggalStr);
+  doc[keyBuf] = energiHari;
+  snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/cost_rp", kalenderTahun, kalenderTanggalStr);
+  doc[keyBuf] = dailyCost;
+  snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/day_of_week", kalenderTahun, kalenderTanggalStr);
+  doc[keyBuf] = kalenderHariMinggu;
+  snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/last_updated", kalenderTahun, kalenderTanggalStr);
+  JsonObject tsDaily = doc.createNestedObject(keyBuf);
+  tsDaily[".sv"] = "timestamp";
 
-  snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_cost/%d", kalenderTahun, kalenderBulan);
-  doc[keyBuf] = monthlyCost;
-
+  // B. Ringkasan Mingguan untuk Grafik 7-Hari Aplikasi (Senin=0 .. Minggu=6)
   snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_energy/%d", kalenderTahun, kalenderHariMinggu);
   doc[keyBuf] = energiHari;
-
   snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_cost/%d", kalenderTahun, kalenderHariMinggu);
   doc[keyBuf] = dailyCost;
 
-  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_energy", kalenderTahun);
+  // C. Ringkasan Bulanan (Januari=0 .. Desember=11)
+  snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", kalenderTahun, kalenderBulan);
   doc[keyBuf] = energiBulan;
-
-  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_cost", kalenderTahun);
+  snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_cost/%d", kalenderTahun, kalenderBulan);
   doc[keyBuf] = monthlyCost;
 
+  // D. Summary Tahunan Nyata (Akumulasi seluruh bulan yang tersedia di tahun ini)
+  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_energy", kalenderTahun);
+  doc[keyBuf] = totalTahunEnergi;
+  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_cost", kalenderTahun);
+  doc[keyBuf] = totalTahunBiaya;
   snprintf(keyBuf, sizeof(keyBuf), "%d/summary/last_updated", kalenderTahun);
-  JsonObject tsObj = doc.createNestedObject(keyBuf);
-  tsObj[".sv"] = "timestamp";
+  JsonObject tsSummary = doc.createNestedObject(keyBuf);
+  tsSummary[".sv"] = "timestamp";
+
+  // E. Sinkronisasi Periode Pending (jika sempat rollover saat offline)
+  if (hasPendingDay && strlen(pendingDayDate) > 0) {
+    snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/energy_kwh", pendingDayYear, pendingDayDate);
+    doc[keyBuf] = pendingDayKwh;
+    snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/cost_rp", pendingDayYear, pendingDayDate);
+    doc[keyBuf] = pendingDayCost;
+    snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/day_of_week", pendingDayYear, pendingDayDate);
+    doc[keyBuf] = pendingDayWday;
+  }
+  if (hasPendingMonth && pendingMonthIdx >= 0) {
+    snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", pendingMonthYear, pendingMonthIdx);
+    doc[keyBuf] = pendingMonthKwh;
+    snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_cost/%d", pendingMonthYear, pendingMonthIdx);
+    doc[keyBuf] = pendingMonthCost;
+  }
 
   String payload;
   serializeJson(doc, payload);
@@ -1240,8 +1590,18 @@ bool kirimHistoriCloud() {
   int httpCode = http.sendRequest("PATCH", payload);
 
   if (httpCode == 200 || httpCode == 204) {
-    Serial.printf("[HISTORI] Sinkronisasi histori ke RTDB sukses (%d, Bln %d=%.3fkWh, Hari %d=%.3fkWh)\n",
-      kalenderTahun, kalenderBulan + 1, energiBulan, kalenderHariMinggu, energiHari);
+    Serial.printf("[HISTORI] Sinkronisasi sukses (Tgl: %s | Bln %d=%.3fkWh | Thn %d=%.3fkWh Rp%.0f)\n",
+      kalenderTanggalStr, kalenderBulan + 1, energiBulan, kalenderTahun, totalTahunEnergi, totalTahunBiaya);
+
+    if (hasPendingDay) {
+      hasPendingDay = false;
+      energyPrefs.putBool("p_day_pend", false);
+    }
+    if (hasPendingMonth) {
+      hasPendingMonth = false;
+      energyPrefs.putBool("p_mon_pend", false);
+    }
+
     http.end();
     return true;
   } else {

@@ -69,7 +69,7 @@
   #define FIREBASE_API_KEY       "YOUR_FIREBASE_WEB_API_KEY"
 #endif
 
-// ------ Kontrol Relay (Safety Guard) ------------------------
-// false = Relay TIDAK digerakkan; perintah dicatat tetapi diabaikan (aman untuk staging).
-// true  = Relay diizinkan beroperasi secara fisik.
-#define ENABLE_RELAY_CONTROL     false
+// ------ Kontrol Relay ---------------------------------------
+// true  = Relay diizinkan beroperasi secara fisik (sesuai hardware aktif).
+// false = Safety guard; perintah dicatat tetapi diabaikan.
+#define ENABLE_RELAY_CONTROL     true

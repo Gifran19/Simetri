@@ -279,6 +279,43 @@ class EnergyDatabaseService {
   }
 
   // -------------------------------------------------------
+  // Ambil rekaman arsip harian permanen (YYYY-MM-DD)
+  // -------------------------------------------------------
+  Future<Map<String, Map<String, dynamic>>> fetchDailyHistory({
+    int? year,
+    String? deviceId,
+  }) async {
+    final db = _db;
+    if (db == null) return {};
+
+    try {
+      final devId = await _resolveDeviceId(deviceId);
+      final targetYear = year ?? DateTime.now().year;
+      final snapshot = await db
+          .ref('energy_data/$devId/$targetYear/daily_history')
+          .get()
+          .timeout(const Duration(seconds: 2));
+
+      if (!snapshot.exists || snapshot.value == null) {
+        return {};
+      }
+
+      final raw = snapshot.value;
+      final result = <String, Map<String, dynamic>>{};
+      if (raw is Map) {
+        raw.forEach((key, val) {
+          if (val is Map) {
+            result[key.toString()] = Map<String, dynamic>.from(val);
+          }
+        });
+      }
+      return result;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  // -------------------------------------------------------
   // Tulis data energi dari ESP32 (dipanggil saat IoT kirim data)
   // -------------------------------------------------------
   Future<void> writeMonthlyReading({
