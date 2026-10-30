@@ -52,6 +52,8 @@
 #include <PZEM004Tv30.h>
 #include <LiquidCrystal_I2C.h>
 #include <Wire.h>
+#include <time.h>
+#include <Preferences.h>
 
 #include "secrets.h"
 #include "root_ca.h"
@@ -145,10 +147,25 @@ unsigned long lastValidReadUptimeMs = 0; // millis() saat pembacaan terakhir suk
 unsigned long totalSensorSuccess    = 0;
 unsigned long totalSensorFail       = 0;
 
-float energyAwalHari       = NAN;
-float energyAwalBulan      = NAN;
-float energiHari           = 0.0f;
-float energiBulan          = 0.0f;
+// ============================================================
+//  KALENDER (NTP WIB UTC+7) & AKUMULASI HISTORI (NVS)
+// ============================================================
+
+Preferences energyPrefs;
+
+const long GMT_OFFSET_SEC           = 7 * 3600; // WIB (UTC+7)
+const int  DAYLIGHT_OFFSET_SEC      = 0;
+
+int  kalenderTahun                  = 0;
+int  kalenderBulan                  = -1; // 0..11
+int  kalenderHari                   = 0;  // 1..31
+int  kalenderHariMinggu             = 0;  // 0=Senin .. 6=Minggu
+bool waktuKalenderValid             = false;
+
+float energyAwalHari                = NAN;
+float energyAwalBulan               = NAN;
+float energiHari                    = 0.0f;
+float energiBulan                   = 0.0f;
 
 // ============================================================
 //  HALAMAN LCD & NAVIGASI
@@ -169,6 +186,7 @@ const unsigned long INTERVAL_HALAMAN        = 3000UL;
 const unsigned long WAKTU_TAMPIL_TOMBOL     = 10000UL;
 const unsigned long INTERVAL_BACA_PZEM      = 1000UL;
 const unsigned long INTERVAL_KIRIM_CLOUD    = 5000UL;
+const unsigned long INTERVAL_KIRIM_HISTORI  = 30000UL; // Kirim histori berkala setiap 30 detik
 const unsigned long INTERVAL_BACA_CTRL      = 3000UL;
 const unsigned long INTERVAL_RETRY_WIFI     = 10000UL; // Reconnect bertahap setiap 10 detik
 const unsigned long INTERVAL_RETRY_LOGIN    = 15000UL; // Retry login setiap 15 detik jika gagal
@@ -179,6 +197,7 @@ unsigned long waktuHalamanOtomatis  = 0;
 unsigned long waktuTombolTerakhir   = 0;
 unsigned long waktuBacaPZEMTerakhir = 0;
 unsigned long waktuKirimCloudTerakhir = 0;
+unsigned long waktuKirimHistoriTerakhir = 0;
 unsigned long waktuBacaCtrlTerakhir = 0;
 unsigned long waktuCobaWiFiTerakhir = 0;
 unsigned long waktuCobaLoginTerakhir = 0;
@@ -221,12 +240,15 @@ void kelolaKoneksiWiFi(unsigned long sekarang);
 bool loginFirebase();
 bool refreshToken();
 bool kirimTelemetriCloud();
+bool kirimHistoriCloud();
 bool bacaKontrolCloud();
+bool periksaWaktuKalender();
 
 String buildAuthUrl();
 String buildRefreshUrl();
 String buildRtdbLiveUrl();
 String buildRtdbControlUrl();
+String buildRtdbEnergyUrl();
 
 // ============================================================
 //  SETUP
@@ -261,11 +283,30 @@ void setup() {
   wifiConnectingStarted = true;
   Serial.printf("[WiFi] Memulai koneksi ke: %s\n", WIFI_SSID);
 
+  // Inisialisasi NVS untuk menjaga akumulasi periode kalender saat ESP32 restart
+  energyPrefs.begin("simetri_energy", false);
+  int savedYear = energyPrefs.getInt("cal_year", 0);
+  int savedMon  = energyPrefs.getInt("cal_mon", -1);
+  int savedDay  = energyPrefs.getInt("cal_day", 0);
+  float savedDayStart = energyPrefs.getFloat("e_start_day", NAN);
+  float savedMonStart = energyPrefs.getFloat("e_start_mon", NAN);
+  if (!isnan(savedDayStart) && savedDay > 0) {
+    energyAwalHari = savedDayStart;
+    kalenderHari   = savedDay;
+    Serial.printf("[NVS] Restore baseline harian: %.4f kWh (Hari: %d)\n", energyAwalHari, savedDay);
+  }
+  if (!isnan(savedMonStart) && savedMon >= 0 && savedYear > 0) {
+    energyAwalBulan = savedMonStart;
+    kalenderBulan   = savedMon;
+    kalenderTahun   = savedYear;
+    Serial.printf("[NVS] Restore baseline bulanan: %.4f kWh (Bln: %d, Thn: %d)\n", energyAwalBulan, savedMon + 1, savedYear);
+  }
+
   // Baca energi awal PZEM
   float eAwal = pzem.energy();
   if (!isnan(eAwal)) {
-    energyAwalHari        = eAwal;
-    energyAwalBulan       = eAwal;
+    if (isnan(energyAwalHari))  energyAwalHari  = eAwal;
+    if (isnan(energyAwalBulan)) energyAwalBulan = eAwal;
     energyKwh             = eAwal;
     sensorReadSuccess     = true;
     lastValidReadUptimeMs = millis();
@@ -344,6 +385,13 @@ void loop() {
   if (wifiTerhubung && firebaseLogin && (sekarang - waktuBacaCtrlTerakhir >= INTERVAL_BACA_CTRL)) {
     waktuBacaCtrlTerakhir = sekarang;
     bacaKontrolCloud();
+  }
+
+  // --- 8. SINKRONISASI HISTORI ENERGI KALENDER KE RTDB (Setiap 30 Detik) ---
+  if (wifiTerhubung && firebaseLogin && (sekarang - waktuKirimHistoriTerakhir >= INTERVAL_KIRIM_HISTORI)) {
+    waktuKirimHistoriTerakhir = sekarang;
+    periksaWaktuKalender();
+    kirimHistoriCloud();
   }
 }
 
@@ -431,13 +479,25 @@ void bacaPZEM() {
 }
 
 void hitungEnergi() {
+  periksaWaktuKalender();
   if (!isnan(energyKwh)) {
-    if (!isnan(energyAwalHari)) {
-      energiHari = max(0.0f, energyKwh - energyAwalHari);
+    if (isnan(energyAwalHari)) {
+      energyAwalHari = energyKwh;
+      if (waktuKalenderValid) {
+        energyPrefs.putFloat("e_start_day", energyAwalHari);
+        energyPrefs.putInt("cal_day", kalenderHari);
+        energyPrefs.putInt("cal_mon", kalenderBulan);
+        energyPrefs.putInt("cal_year", kalenderTahun);
+      }
     }
-    if (!isnan(energyAwalBulan)) {
-      energiBulan = max(0.0f, energyKwh - energyAwalBulan);
+    if (isnan(energyAwalBulan)) {
+      energyAwalBulan = energyKwh;
+      if (waktuKalenderValid) {
+        energyPrefs.putFloat("e_start_mon", energyAwalBulan);
+      }
     }
+    energiHari = max(0.0f, energyKwh - energyAwalHari);
+    energiBulan = max(0.0f, energyKwh - energyAwalBulan);
   }
 }
 
@@ -557,11 +617,9 @@ void kelolaKoneksiWiFi(unsigned long sekarang) {
       wifiTerhubung = true;
       Serial.printf("[WiFi] Terhubung sukses. IP: %s | RSSI: %d dBm\n",
         WiFi.localIP().toString().c_str(), WiFi.RSSI());
-#if !USE_FIREBASE_EMULATOR
-      // Sinkronisasi waktu sistem via SNTP penting untuk validasi masa berlaku sertifikat TLS (X.509)
-      Serial.println("[NTP] Mengonfigurasi sinkronisasi waktu SNTP untuk TLS...");
-      configTime(0, 0, "pool.ntp.org", "time.google.com");
-#endif
+      // Sinkronisasi waktu sistem via SNTP (WIB UTC+7) penting untuk validasi kalender & sertifikat TLS (X.509)
+      Serial.println("[NTP] Mengonfigurasi sinkronisasi waktu SNTP (WIB UTC+7)...");
+      configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.google.com");
     }
   } else {
     if (wifiTerhubung) {
@@ -663,6 +721,30 @@ String buildRtdbControlUrl() {
   url += "/devices/";
   url += DEVICE_ID;
   url += "/control.json?auth=";
+  url += firebaseIdToken;
+  return url;
+#endif
+}
+
+String buildRtdbEnergyUrl() {
+#if USE_FIREBASE_EMULATOR
+  String url = "http://";
+  url += EMULATOR_HOST;
+  url += ":";
+  url += String(EMULATOR_RTDB_PORT);
+  url += "/energy_data/";
+  url += DEVICE_ID;
+  url += ".json?ns=";
+  url += FIREBASE_RTDB_NAMESPACE;
+  url += "&auth=";
+  url += firebaseIdToken;
+  return url;
+#else
+  String url = "https://";
+  url += FIREBASE_HOST;
+  url += "/energy_data/";
+  url += DEVICE_ID;
+  url += ".json?auth=";
   url += firebaseIdToken;
   return url;
 #endif
@@ -1011,3 +1093,165 @@ bool bacaKontrolCloud() {
     return false;
   }
 }
+
+// ============================================================
+//  PEMANTAUAN KALENDER (WIB UTC+7) & ROLLOVER ENERGI HARIAN/BULANAN
+// ============================================================
+
+bool periksaWaktuKalender() {
+  time_t nowSec = time(nullptr);
+  if (nowSec < 1600000000) {
+    waktuKalenderValid = false;
+    return false;
+  }
+
+  struct tm timeinfo;
+  if (!localtime_r(&nowSec, &timeinfo)) {
+    return false;
+  }
+
+  int tahun = timeinfo.tm_year + 1900;
+  int bulan = timeinfo.tm_mon;            // 0..11
+  int hari  = timeinfo.tm_mday;           // 1..31
+  int hariM = (timeinfo.tm_wday + 6) % 7; // 0=Senin .. 6=Minggu
+
+  if (!waktuKalenderValid) {
+    waktuKalenderValid = true;
+    kalenderTahun = tahun;
+    kalenderBulan = bulan;
+    kalenderHari  = hari;
+    kalenderHariMinggu = hariM;
+
+    int savedYear = energyPrefs.getInt("cal_year", 0);
+    int savedMon  = energyPrefs.getInt("cal_mon", -1);
+    int savedDay  = energyPrefs.getInt("cal_day", 0);
+
+    if (savedYear != tahun || savedMon != bulan || savedDay != hari) {
+      Serial.printf("[KALENDER] Tanggal berganti sejak offline/reboot: %04d-%02d-%02d -> %04d-%02d-%02d\n",
+        savedYear, savedMon + 1, savedDay, tahun, bulan + 1, hari);
+
+      if (!isnan(energyKwh)) {
+        energyAwalHari = energyKwh;
+        energyPrefs.putFloat("e_start_day", energyAwalHari);
+        energyPrefs.putInt("cal_day", hari);
+
+        if (savedYear != tahun || savedMon != bulan) {
+          energyAwalBulan = energyKwh;
+          energyPrefs.putFloat("e_start_mon", energyAwalBulan);
+          energyPrefs.putInt("cal_mon", bulan);
+          energyPrefs.putInt("cal_year", tahun);
+        }
+      }
+    } else {
+      Serial.printf("[KALENDER] Tanggal kalender sinkron dengan NVS: %04d-%02d-%02d (Wday %d)\n",
+        tahun, bulan + 1, hari, hariM);
+    }
+    return true;
+  }
+
+  // Cek apakah tanggal kalender berganti (rollover tengah malam 00:00 WIB)
+  if (hari != kalenderHari || bulan != kalenderBulan || tahun != kalenderTahun) {
+    Serial.printf("[KALENDER] Rollover hari terdeteksi: %02d/%02d/%04d -> %02d/%02d/%04d\n",
+      kalenderHari, kalenderBulan + 1, kalenderTahun, hari, bulan + 1, tahun);
+
+    if (!isnan(energyKwh)) {
+      energyAwalHari = energyKwh;
+      energyPrefs.putFloat("e_start_day", energyAwalHari);
+      energyPrefs.putInt("cal_day", hari);
+
+      if (bulan != kalenderBulan || tahun != kalenderTahun) {
+        Serial.printf("[KALENDER] Rollover bulan terdeteksi: %02d -> %02d\n", kalenderBulan + 1, bulan + 1);
+        energyAwalBulan = energyKwh;
+        energyPrefs.putFloat("e_start_mon", energyAwalBulan);
+        energyPrefs.putInt("cal_mon", bulan);
+        energyPrefs.putInt("cal_year", tahun);
+      }
+    }
+
+    kalenderTahun = tahun;
+    kalenderBulan = bulan;
+    kalenderHari  = hari;
+    kalenderHariMinggu = hariM;
+  }
+
+  return true;
+}
+
+// ============================================================
+//  PENGIRIMAN HISTORI ENERGI & BIAYA KE REALTIME DATABASE
+// ============================================================
+
+bool kirimHistoriCloud() {
+  if (firebaseIdToken.isEmpty() || !waktuKalenderValid || kalenderTahun < 2024 || isnan(energyKwh)) {
+    return false;
+  }
+
+  String url = buildRtdbEnergyUrl();
+  HTTPClient http;
+  http.setTimeout(NETWORK_TIMEOUT_MS);
+
+#if USE_FIREBASE_EMULATOR
+  WiFiClient plainClient;
+  if (!http.begin(plainClient, url)) return false;
+#else
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(GOOGLE_ROOT_CA);
+  if (!http.begin(secureClient, url)) return false;
+#endif
+
+  http.addHeader("Content-Type", "application/json");
+
+  float dailyCost = (float)roundf(energiHari * tarifPerKwh);
+  float monthlyCost = (float)roundf(energiBulan * tarifPerKwh);
+
+  DynamicJsonDocument doc(768);
+
+  // Daftarkan tahun saat ini ke available_years
+  JsonArray yearsArr = doc.createNestedArray("available_years");
+  yearsArr.add(kalenderTahun);
+
+  char keyBuf[64];
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", kalenderTahun, kalenderBulan);
+  doc[keyBuf] = energiBulan;
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_cost/%d", kalenderTahun, kalenderBulan);
+  doc[keyBuf] = monthlyCost;
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_energy/%d", kalenderTahun, kalenderHariMinggu);
+  doc[keyBuf] = energiHari;
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_cost/%d", kalenderTahun, kalenderHariMinggu);
+  doc[keyBuf] = dailyCost;
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_energy", kalenderTahun);
+  doc[keyBuf] = energiBulan;
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_cost", kalenderTahun);
+  doc[keyBuf] = monthlyCost;
+
+  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/last_updated", kalenderTahun);
+  JsonObject tsObj = doc.createNestedObject(keyBuf);
+  tsObj[".sv"] = "timestamp";
+
+  String payload;
+  serializeJson(doc, payload);
+
+  int httpCode = http.sendRequest("PATCH", payload);
+
+  if (httpCode == 200 || httpCode == 204) {
+    Serial.printf("[HISTORI] Sinkronisasi histori ke RTDB sukses (%d, Bln %d=%.3fkWh, Hari %d=%.3fkWh)\n",
+      kalenderTahun, kalenderBulan + 1, energiBulan, kalenderHariMinggu, energiHari);
+    http.end();
+    return true;
+  } else {
+    Serial.printf("[HISTORI] Gagal sinkronisasi histori. HTTP: %d\n", httpCode);
+    if (httpCode == 401) {
+      Serial.println("[HISTORI] Unauthorized (token expired). Memicu login ulang.");
+      firebaseLogin = false;
+    }
+    http.end();
+    return false;
+  }
+}
+

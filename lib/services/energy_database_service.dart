@@ -201,6 +201,84 @@ class EnergyDatabaseService {
   }
 
   // -------------------------------------------------------
+  // Ambil data energi mingguan (Sen - Min: index 0..6)
+  // -------------------------------------------------------
+  Future<List<double>> fetchWeeklyEnergy([String? deviceId]) async {
+    final db = _db;
+    if (db == null) return List.filled(7, 0.0);
+
+    try {
+      final devId = await _resolveDeviceId(deviceId);
+      final now = DateTime.now();
+      final year = now.year;
+      final snapshot = await db
+          .ref('energy_data/$devId/$year/weekly_energy')
+          .get()
+          .timeout(const Duration(seconds: 2));
+
+      if (!snapshot.exists || snapshot.value == null) {
+        return List.filled(7, 0.0);
+      }
+
+      final raw = snapshot.value;
+      final result = List<double>.filled(7, 0.0);
+      if (raw is Map) {
+        raw.forEach((key, val) {
+          final idx = int.tryParse(key.toString());
+          if (idx != null && idx >= 0 && idx < 7 && val is num) {
+            result[idx] = val.toDouble();
+          }
+        });
+      } else if (raw is List) {
+        for (int i = 0; i < raw.length && i < 7; i++) {
+          final val = raw[i];
+          if (val is num) result[i] = val.toDouble();
+        }
+      }
+      return result;
+    } catch (_) {
+      return List.filled(7, 0.0);
+    }
+  }
+
+  // -------------------------------------------------------
+  // Stream data energi mingguan (Sen - Min: index 0..6)
+  // -------------------------------------------------------
+  Stream<List<double>> streamWeeklyEnergy([String? deviceId]) async* {
+    final db = _db;
+    if (db == null) {
+      yield List.filled(7, 0.0);
+      return;
+    }
+
+    final devId = await _resolveDeviceId(deviceId);
+    final now = DateTime.now();
+    final year = now.year;
+
+    yield* db.ref('energy_data/$devId/$year/weekly_energy').onValue.map((event) {
+      if (!event.snapshot.exists || event.snapshot.value == null) {
+        return List<double>.filled(7, 0.0);
+      }
+      final raw = event.snapshot.value;
+      final result = List<double>.filled(7, 0.0);
+      if (raw is Map) {
+        raw.forEach((key, val) {
+          final idx = int.tryParse(key.toString());
+          if (idx != null && idx >= 0 && idx < 7 && val is num) {
+            result[idx] = val.toDouble();
+          }
+        });
+      } else if (raw is List) {
+        for (int i = 0; i < raw.length && i < 7; i++) {
+          final val = raw[i];
+          if (val is num) result[i] = val.toDouble();
+        }
+      }
+      return result;
+    });
+  }
+
+  // -------------------------------------------------------
   // Tulis data energi dari ESP32 (dipanggil saat IoT kirim data)
   // -------------------------------------------------------
   Future<void> writeMonthlyReading({

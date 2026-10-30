@@ -5,7 +5,9 @@ import 'package:intl/intl.dart';
 import '../firebase_options.dart';
 import '../models/device_data.dart';
 import '../models/sensor_reading.dart';
+import '../models/yearly_energy_data.dart';
 import '../services/device_service.dart';
+import '../services/energy_database_service.dart';
 import '../services/live_status.dart';
 import '../services/sensor_stream_service.dart';
 import '../services/security_service.dart';
@@ -43,6 +45,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _pendingTimer;
 
   StreamSubscription<SensorReading>? _sensorSubscription;
+  StreamSubscription<List<double>>? _weeklySubscription;
+  StreamSubscription<YearlyEnergyData>? _yearlySubscription;
   final NumberFormat _currencyFormatter = NumberFormat.currency(
     locale: 'id_ID',
     symbol: 'Rp ',
@@ -59,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
     DeviceService.connectionNotifier.addListener(_onConnectionNotifierChanged);
     DeviceService.deviceIdNotifier.addListener(_onDeviceIdChanged);
     _initSensorStream();
+    _initHistoryStreams();
     _loadSavedConnectionState();
   }
 
@@ -69,6 +74,8 @@ class _HomeScreenState extends State<HomeScreen> {
     DeviceService.connectionNotifier.removeListener(_onConnectionNotifierChanged);
     DeviceService.deviceIdNotifier.removeListener(_onDeviceIdChanged);
     _sensorSubscription?.cancel();
+    _weeklySubscription?.cancel();
+    _yearlySubscription?.cancel();
     SensorStreamService.instance.stopStreaming();
     super.dispose();
   }
@@ -80,9 +87,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onDeviceIdChanged() {
+    _initHistoryStreams();
     if (mounted) {
       setState(() {});
     }
+  }
+
+  /// Langganan stream histori mingguan dan tahunan dari Firebase RTDB
+  void _initHistoryStreams() {
+    _weeklySubscription?.cancel();
+    _yearlySubscription?.cancel();
+
+    final dbService = EnergyDatabaseService();
+    final now = DateTime.now();
+
+    _weeklySubscription = dbService.streamWeeklyEnergy().listen((weekly) {
+      if (mounted) {
+        setState(() {
+          _device = _device.copyWith(dailyHistory: weekly);
+        });
+      }
+    });
+
+    _yearlySubscription = dbService.streamYearlyData(now.year).listen((yearly) {
+      if (mounted) {
+        setState(() {
+          _device = _device.copyWith(monthlyEnergyHistory: yearly.monthlyEnergy);
+        });
+      }
+    });
   }
 
   void _onConnectionNotifierChanged() {
@@ -253,6 +286,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
             // Mulai streaming sensor begitu terhubung
             SensorStreamService.instance.startStreaming();
+            _initHistoryStreams();
 
             messenger.showSnackBar(
               SnackBar(
@@ -332,6 +366,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 _clearRelayPending();
                 await DeviceService.clearPairedDevice();
+                _weeklySubscription?.cancel();
+                _yearlySubscription?.cancel();
                 SensorStreamService.instance.stopStreaming();
 
                 if (!mounted) return;

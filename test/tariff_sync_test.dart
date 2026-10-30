@@ -137,5 +137,21 @@ void main() {
       expect(DeviceService.currentTariff, equals(1500.0));
       expect(DeviceService.tariffActiveDate, equals('2026-10-29'));
     });
+
+    test('EnergyDatabaseService weekly energy parsing handles list and map structures without duplication', () {
+      final mapData = {'0': 0.05, '1': 0.12, '2': 0.0, '3': 0.25, '4': 0.0, '5': 0.0, '6': 0.0};
+      final listResult = List<double>.filled(7, 0.0);
+      mapData.forEach((key, val) {
+        final idx = int.tryParse(key);
+        if (idx != null && idx >= 0 && idx < 7) {
+          listResult[idx] = (val as num).toDouble();
+        }
+      });
+
+      expect(listResult[0], equals(0.05));
+      expect(listResult[1], equals(0.12));
+      expect(listResult[3], equals(0.25));
+      expect(listResult.length, equals(7));
+    });
   });
 }

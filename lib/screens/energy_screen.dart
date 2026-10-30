@@ -4,6 +4,7 @@ import 'home_screen.dart';
 import '../models/yearly_energy_data.dart';
 import '../services/device_service.dart';
 import '../services/energy_database_service.dart';
+import '../services/live_status.dart';
 import '../utils/responsive.dart';
 import '../widgets/energy_analysis_summary.dart';
 import '../widgets/monthly_energy_chart.dart';
@@ -26,8 +27,8 @@ class EnergyScreen extends StatefulWidget {
 class _EnergyScreenState extends State<EnergyScreen> {
   final EnergyDatabaseService _dbService = EnergyDatabaseService();
 
-  List<int> _availableYears = [2026, 2025, 2024];
-  int _selectedYear = 2026;
+  List<int> _availableYears = kDemoMode ? [2026, 2025, 2024] : [DateTime.now().year];
+  int _selectedYear = DateTime.now().year;
   late YearlyEnergyData _yearData;
   double _monthlyBudget = 300000;
   bool _isConnected = false;
