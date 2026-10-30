@@ -1,6 +1,7 @@
 // ============================================================
 //  SIMETRI Firebase Integrated Firmware
-//  File: firmware_iot/simetri_firebase_integrated/simetri_firebase_integrated.ino
+//  File:
+//  firmware_iot/simetri_firebase_integrated/simetri_firebase_integrated.ino
 //
 //  Versi    : 1.1.0-staging (ENABLE_RELAY_CONTROL=false)
 //  Target   : ESP32 (Espressif ESP32 Arduino Core)
@@ -15,104 +16,113 @@
 //  - Relay          : GPIO14, active LOW
 //
 //  STATUS IMPLEMENTASI & PENGUJIAN:
-//  - Kompilasi Compiler : Belum dikompilasi (tool compiler arduino-cli/pio belum tersedia di environment ini)
-//  - Emulator Suite     : Pengujian endpoint Auth & RTDB lokal via mode emulator HTTP
+//  - Kompilasi Compiler : Belum dikompilasi (tool compiler arduino-cli/pio
+//  belum tersedia di environment ini)
+//  - Emulator Suite     : Pengujian endpoint Auth & RTDB lokal via mode
+//  emulator HTTP
 //  - Hardware Fisik     : Pengujian hardware terpisah (pending flashing)
 //
 //  FITUR KEAMANAN & ARSITEKTUR:
 //  1. Mode emulator/cloud eksplisit:
-//     - Emulator: HTTP ke IP komputer pengembang (port Auth 9099, port RTDB 9000, namespace eksplisit).
-//     - Cloud: HTTPS dengan verifikasi sertifikat Root CA Google Trust Services (tanpa setInsecure).
+//     - Emulator: HTTP ke IP komputer pengembang (port Auth 9099, port RTDB
+//     9000, namespace eksplisit).
+//     - Cloud: HTTPS dengan verifikasi sertifikat Root CA Google Trust Services
+//     (tanpa setInsecure).
 //     - Kredensial emulator TIDAK dikirimkan ke endpoint Google.
 //  2. Timestamp:
 //     - Menggunakan Firebase server timestamp {".sv": "timestamp"} untuk RTDB.
-//     - millis() disimpan terpisah sebagai uptime_ms, reading_age_ms, dan sent_uptime_ms.
+//     - millis() disimpan terpisah sebagai uptime_ms, reading_age_ms, dan
+//     sent_uptime_ms.
 //     - Uptime TIDAK digunakan sebagai Unix timestamp.
 //  3. Relay:
 //     - ENABLE_RELAY_CONTROL=false secara default.
 //     - Status relay_output_state tidak diubah oleh perintah yang diabaikan.
-//     - requested_power, relay_output_state, dan relay_control_enabled dipisahkan.
+//     - requested_power, relay_output_state, dan relay_control_enabled
+//     dipisahkan.
 //     - Respons null / non-boolean dari RTDB TIDAK dianggap perintah OFF.
 //  4. Validitas Sensor:
 //     - Keberhasilan dan usia pembacaan (reading_age_ms) dicatat.
-//     - Pembacaan gagal tidak diganti angka nol yang tampak valid (dikirim null & sensor_valid=false).
+//     - Pembacaan gagal tidak diganti angka nol yang tampak valid (dikirim null
+//     & sensor_valid=false).
 //     - Nilai lama tidak dikirim sebagai pembacaan baru.
 //  5. Koneksi & Timing:
 //     - Wi-Fi reconnection non-blocking bertahap (tanpa delay loop 15 detik).
 //     - Retry login dengan jeda backoff terjadwal.
-//     - Network timeout dibatasi (3000 ms) agar sensor, LCD, dan tombol tidak terblokir.
+//     - Network timeout dibatasi (3000 ms) agar sensor, LCD, dan tombol tidak
+//     terblokir.
 //     - Penjadwalan refresh token aman terhadap rollover millis().
 // ============================================================
 
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <LiquidCrystal_I2C.h>
+#include <PZEM004Tv30.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <PZEM004Tv30.h>
-#include <LiquidCrystal_I2C.h>
 #include <Wire.h>
 #include <time.h>
-#include <Preferences.h>
 
-#include "secrets.h"
 #include "root_ca.h"
+#include "secrets.h"
 
 // ============================================================
 //  VERIFIKASI KONFIGURASI secrets.h
 // ============================================================
 
 #ifndef USE_FIREBASE_EMULATOR
-  #error "USE_FIREBASE_EMULATOR belum ditentukan di secrets.h. Set true (emulator) atau false (cloud)."
+#error                                                                         \
+    "USE_FIREBASE_EMULATOR belum ditentukan di secrets.h. Set true (emulator) atau false (cloud)."
 #endif
 
 #ifndef WIFI_SSID
-  #error "WIFI_SSID tidak didefinisikan. Periksa secrets.h."
+#error "WIFI_SSID tidak didefinisikan. Periksa secrets.h."
 #endif
 #ifndef DEVICE_ID
-  #error "DEVICE_ID tidak didefinisikan. Periksa secrets.h."
+#error "DEVICE_ID tidak didefinisikan. Periksa secrets.h."
 #endif
 #ifndef DEVICE_EMAIL
-  #error "DEVICE_EMAIL tidak didefinisikan. Periksa secrets.h."
+#error "DEVICE_EMAIL tidak didefinisikan. Periksa secrets.h."
 #endif
 #ifndef DEVICE_PASSWORD
-  #error "DEVICE_PASSWORD tidak didefinisikan. Periksa secrets.h."
+#error "DEVICE_PASSWORD tidak didefinisikan. Periksa secrets.h."
 #endif
 
 #if USE_FIREBASE_EMULATOR
-  #ifndef EMULATOR_HOST
-    #error "EMULATOR_HOST wajib didefinisikan untuk mode emulator di secrets.h."
-  #endif
-  #ifndef EMULATOR_AUTH_PORT
-    #define EMULATOR_AUTH_PORT 9099
-  #endif
-  #ifndef EMULATOR_RTDB_PORT
-    #define EMULATOR_RTDB_PORT 9000
-  #endif
-  #ifndef FIREBASE_RTDB_NAMESPACE
-    #define FIREBASE_RTDB_NAMESPACE "simetri-app-default-rtdb"
-  #endif
+#ifndef EMULATOR_HOST
+#error "EMULATOR_HOST wajib didefinisikan untuk mode emulator di secrets.h."
+#endif
+#ifndef EMULATOR_AUTH_PORT
+#define EMULATOR_AUTH_PORT 9099
+#endif
+#ifndef EMULATOR_RTDB_PORT
+#define EMULATOR_RTDB_PORT 9000
+#endif
+#ifndef FIREBASE_RTDB_NAMESPACE
+#define FIREBASE_RTDB_NAMESPACE "simetri-app-default-rtdb"
+#endif
 #else
-  #ifndef FIREBASE_HOST
-    #error "FIREBASE_HOST wajib didefinisikan untuk mode cloud di secrets.h."
-  #endif
-  #ifndef FIREBASE_API_KEY
-    #error "FIREBASE_API_KEY wajib didefinisikan untuk mode cloud di secrets.h."
-  #endif
+#ifndef FIREBASE_HOST
+#error "FIREBASE_HOST wajib didefinisikan untuk mode cloud di secrets.h."
+#endif
+#ifndef FIREBASE_API_KEY
+#error "FIREBASE_API_KEY wajib didefinisikan untuk mode cloud di secrets.h."
+#endif
 #endif
 
 // ============================================================
 //  PIN HARDWARE
 // ============================================================
 
-#define PZEM_RX_PIN        16
-#define PZEM_TX_PIN        17
-#define TOMBOL_KONDISI     25
-#define TOMBOL_HARI        26
-#define TOMBOL_BULAN       27
-#define BUZZER_PIN         19
-#define RELAY_PIN          14
-#define RELAY_ACTIVE_LOW   true
+#define PZEM_RX_PIN 16
+#define PZEM_TX_PIN 17
+#define TOMBOL_KONDISI 25
+#define TOMBOL_HARI 26
+#define TOMBOL_BULAN 27
+#define BUZZER_PIN 19
+#define RELAY_PIN 14
+#define RELAY_ACTIVE_LOW true
 
 // ============================================================
 //  INISIALISASI OBJEK HARDWARE
@@ -124,28 +134,31 @@ LiquidCrystal_I2C lcd(0x27, 20, 2);
 
 // ============================================================
 //  STATUS RELAY
-//  Pemisahan status: requested_power vs relay_output_state vs relay_control_enabled
+//  Pemisahan status: requested_power vs relay_output_state vs
+//  relay_control_enabled
 // ============================================================
 
-bool requestedPower        = false; // Perintah daya terakhir dari cloud
-bool relayOutputState      = false; // Logika sinyal GPIO output relay saat ini
-const bool relayControlEnabled = ENABLE_RELAY_CONTROL; // Konfigurasi compile-time
+bool requestedPower = false;   // Perintah daya terakhir dari cloud
+bool relayOutputState = false; // Logika sinyal GPIO output relay saat ini
+const bool relayControlEnabled =
+    ENABLE_RELAY_CONTROL; // Konfigurasi compile-time
 
 // ============================================================
 //  DATA SENSOR & VALIDITAS PEMBACAAN
 // ============================================================
 
-float voltage              = NAN;
-float current              = NAN;
-float power                = NAN;
-float energyKwh            = NAN;
-float frequency            = NAN;
-float pf                   = NAN;
+float voltage = NAN;
+float current = NAN;
+float power = NAN;
+float energyKwh = NAN;
+float frequency = NAN;
+float pf = NAN;
 
-bool  sensorReadSuccess    = false; // Validitas siklus pembacaan sensor terakhir
-unsigned long lastValidReadUptimeMs = 0; // millis() saat pembacaan terakhir sukses
-unsigned long totalSensorSuccess    = 0;
-unsigned long totalSensorFail       = 0;
+bool sensorReadSuccess = false; // Validitas siklus pembacaan sensor terakhir
+unsigned long lastValidReadUptimeMs =
+    0; // millis() saat pembacaan terakhir sukses
+unsigned long totalSensorSuccess = 0;
+unsigned long totalSensorFail = 0;
 
 // ============================================================
 //  KALENDER (NTP WIB UTC+7) & AKUMULASI HISTORI (NVS)
@@ -153,8 +166,8 @@ unsigned long totalSensorFail       = 0;
 
 Preferences energyPrefs;
 
-const long GMT_OFFSET_SEC           = 7 * 3600; // WIB (UTC+7)
-const int  DAYLIGHT_OFFSET_SEC      = 0;
+const long GMT_OFFSET_SEC = 7 * 3600; // WIB (UTC+7)
+const int DAYLIGHT_OFFSET_SEC = 0;
 
 int  kalenderTahun                  = 0;
 int  kalenderBulan                  = -1; // 0..11
@@ -163,80 +176,93 @@ int  kalenderHariMinggu             = 0;  // 0=Senin .. 6=Minggu
 char kalenderTanggalStr[16]         = ""; // "YYYY-MM-DD"
 bool waktuKalenderValid             = false;
 
-float energyAwalHari                = NAN;
-float energyAwalBulan               = NAN;
-float energiHari                    = 0.0f;
-float energiBulan                   = 0.0f;
+float energyAwalHari = NAN;
+float energyAwalBulan = NAN;
+float energiHari = 0.0f;
+float energiBulan = 0.0f;
 
-// Antrean periode selesai yang menunggu sinkronisasi cloud (Pending Queue NVS)
-char  pendingDayDate[16]            = "";
-int   pendingDayYear                = 0;
-float pendingDayKwh                 = 0.0f;
-float pendingDayCost                = 0.0f;
-int   pendingDayWday                = 0;
-bool  hasPendingDay                 = false;
+// Antrean periode harian selesai saat offline (Kapasitas: 7 hari / 1 minggu)
+const int MAX_PENDING_DAYS = 7;
 
+struct PendingDayRecord {
+  char  date[16]; // "YYYY-MM-DD"
+  int   year;
+  float kwh;
+  float cost;
+  int   wday;     // 0=Sen .. 6=Min
+};
+
+PendingDayRecord pendingDays[MAX_PENDING_DAYS];
+int pendingDayCount = 0;
+
+// Antrean bulan selesai saat offline
 int   pendingMonthYear              = 0;
 int   pendingMonthIdx               = -1;
 float pendingMonthKwh               = 0.0f;
 float pendingMonthCost              = 0.0f;
 bool  hasPendingMonth               = false;
 
-// Cache bulanan 0..11 untuk akumulasi summary tahunan nyata
+// Cache bulanan 0..11 untuk akumulasi summary tahunan nyata (dipisahkan per tahun)
+int   cachedYear                    = 0;
 float energiBulanCached[12]         = {0.0f};
 float biayaBulanCached[12]          = {0.0f};
 bool  monthlyCacheLoaded            = false;
 int   tahunTerdaftarDiCloud         = 0;
+bool  perluResetMingguan            = false;
 
 // ============================================================
 //  HALAMAN LCD & NAVIGASI
 // ============================================================
 
-int  halaman               = 0;
-bool modeTombol            = false;
+int halaman = 0;
+bool modeTombol = false;
 
-bool tombolKondisiSebelum  = HIGH;
-bool tombolHariSebelum     = HIGH;
-bool tombolBulanSebelum    = HIGH;
+bool tombolKondisiSebelum = HIGH;
+bool tombolHariSebelum = HIGH;
+bool tombolBulanSebelum = HIGH;
 
 // ============================================================
 //  INTERVAL DAN PENJADWALAN NON-BLOCKING (ROLLOVER-SAFE)
 // ============================================================
 
-const unsigned long INTERVAL_HALAMAN        = 3000UL;
-const unsigned long WAKTU_TAMPIL_TOMBOL     = 10000UL;
-const unsigned long INTERVAL_BACA_PZEM      = 1000UL;
-const unsigned long INTERVAL_KIRIM_CLOUD    = 5000UL;
-const unsigned long INTERVAL_KIRIM_HISTORI  = 30000UL; // Kirim histori berkala setiap 30 detik
-const unsigned long INTERVAL_BACA_CTRL      = 3000UL;
-const unsigned long INTERVAL_RETRY_WIFI     = 10000UL; // Reconnect bertahap setiap 10 detik
-const unsigned long INTERVAL_RETRY_LOGIN    = 15000UL; // Retry login setiap 15 detik jika gagal
-const unsigned long INTERVAL_REFRESH_TOKEN  = 50UL * 60UL * 1000UL; // 50 menit
-const unsigned long NETWORK_TIMEOUT_MS      = 3000UL; // Batasi operasi jaringan maks 3 detik
+const unsigned long INTERVAL_HALAMAN = 3000UL;
+const unsigned long WAKTU_TAMPIL_TOMBOL = 10000UL;
+const unsigned long INTERVAL_BACA_PZEM = 1000UL;
+const unsigned long INTERVAL_KIRIM_CLOUD = 5000UL;
+const unsigned long INTERVAL_KIRIM_HISTORI =
+    30000UL; // Kirim histori berkala setiap 30 detik
+const unsigned long INTERVAL_BACA_CTRL = 3000UL;
+const unsigned long INTERVAL_RETRY_WIFI =
+    10000UL; // Reconnect bertahap setiap 10 detik
+const unsigned long INTERVAL_RETRY_LOGIN =
+    15000UL; // Retry login setiap 15 detik jika gagal
+const unsigned long INTERVAL_REFRESH_TOKEN = 50UL * 60UL * 1000UL; // 50 menit
+const unsigned long NETWORK_TIMEOUT_MS =
+    3000UL; // Batasi operasi jaringan maks 3 detik
 
-unsigned long waktuHalamanOtomatis  = 0;
-unsigned long waktuTombolTerakhir   = 0;
+unsigned long waktuHalamanOtomatis = 0;
+unsigned long waktuTombolTerakhir = 0;
 unsigned long waktuBacaPZEMTerakhir = 0;
 unsigned long waktuKirimCloudTerakhir = 0;
 unsigned long waktuKirimHistoriTerakhir = 0;
 unsigned long waktuBacaCtrlTerakhir = 0;
 unsigned long waktuCobaWiFiTerakhir = 0;
 unsigned long waktuCobaLoginTerakhir = 0;
-unsigned long waktuTokenDidapat     = 0; // rollover-safe reference
+unsigned long waktuTokenDidapat = 0; // rollover-safe reference
 
 // ============================================================
 //  FIREBASE AUTH & NETWORK STATE
 // ============================================================
 
-String firebaseIdToken              = "";
-String firebaseRefreshTkn           = "";
+String firebaseIdToken = "";
+String firebaseRefreshTkn = "";
 
-bool wifiTerhubung                  = false;
-bool firebaseLogin                  = false;
-bool wifiConnectingStarted          = false;
+bool wifiTerhubung = false;
+bool firebaseLogin = false;
+bool wifiConnectingStarted = false;
 
 // Tarif listrik default (dapat disinkronkan dari control)
-float tarifPerKwh                   = 1500.0f;
+float tarifPerKwh = 1500.0f;
 
 // Buffer LCD
 static char lcdBuf[21];
@@ -252,7 +278,7 @@ void setRelayOutput(bool state);
 void tampilKondisi();
 void tampilHari();
 void tampilBulan();
-void tampilPesan(const char* baris1, const char* baris2);
+void tampilPesan(const char *baris1, const char *baris2);
 void bunyiBuzzer();
 void tanganiTombol();
 void rotasiHalamanOtomatis();
@@ -266,6 +292,7 @@ bool bacaKontrolCloud();
 bool periksaWaktuKalender();
 bool pastikanTahunTerdaftar();
 bool muatRiwayatBulananDariCloud();
+void antrekanHariSelesai(const char* dateStr, int year, float kwh, float cost, int wday);
 
 String buildAuthUrl();
 String buildRefreshUrl();
@@ -287,15 +314,15 @@ void setup() {
   Serial.println("  SIMETRI Firebase Integrated Firmware v1.1.0     ");
 #if USE_FIREBASE_EMULATOR
   Serial.println("  Mode Operasi : EMULATOR (HTTP lokal)            ");
-  Serial.printf ("  Emulator Host: %s (Auth:%d, RTDB:%d)            \n",
-    EMULATOR_HOST, EMULATOR_AUTH_PORT, EMULATOR_RTDB_PORT);
+  Serial.printf("  Emulator Host: %s (Auth:%d, RTDB:%d)            \n",
+                EMULATOR_HOST, EMULATOR_AUTH_PORT, EMULATOR_RTDB_PORT);
 #else
   Serial.println("  Mode Operasi : CLOUD PRODUCTION (HTTPS TLS)     ");
   Serial.println("  Verifikasi   : Root CA GTS Google Trust Services");
 #endif
-  Serial.printf ("  Relay Control: %s (ENABLE_RELAY_CONTROL=%s)\n",
-    relayControlEnabled ? "ENABLED" : "DISABLED (Staging Safe)",
-    relayControlEnabled ? "true" : "false");
+  Serial.printf("  Relay Control: %s (ENABLE_RELAY_CONTROL=%s)\n",
+                relayControlEnabled ? "ENABLED" : "DISABLED (Staging Safe)",
+                relayControlEnabled ? "true" : "false");
   Serial.println("==================================================");
 
   initHardware();
@@ -307,36 +334,48 @@ void setup() {
   wifiConnectingStarted = true;
   Serial.printf("[WiFi] Memulai koneksi ke: %s\n", WIFI_SSID);
 
-  // Inisialisasi NVS untuk menjaga akumulasi periode kalender saat ESP32 restart
+  // Inisialisasi NVS untuk menjaga akumulasi periode kalender saat ESP32
+  // restart
   energyPrefs.begin("simetri_energy", false);
   int savedYear = energyPrefs.getInt("cal_year", 0);
-  int savedMon  = energyPrefs.getInt("cal_mon", -1);
-  int savedDay  = energyPrefs.getInt("cal_day", 0);
+  int savedMon = energyPrefs.getInt("cal_mon", -1);
+  int savedDay = energyPrefs.getInt("cal_day", 0);
   float savedDayStart = energyPrefs.getFloat("e_start_day", NAN);
   float savedMonStart = energyPrefs.getFloat("e_start_mon", NAN);
   if (!isnan(savedDayStart) && savedDay > 0) {
     energyAwalHari = savedDayStart;
-    kalenderHari   = savedDay;
-    Serial.printf("[NVS] Restore baseline harian: %.4f kWh (Hari: %d)\n", energyAwalHari, savedDay);
+    kalenderHari = savedDay;
+    Serial.printf("[NVS] Restore baseline harian: %.4f kWh (Hari: %d)\n",
+                  energyAwalHari, savedDay);
   }
   if (!isnan(savedMonStart) && savedMon >= 0 && savedYear > 0) {
     energyAwalBulan = savedMonStart;
-    kalenderBulan   = savedMon;
-    kalenderTahun   = savedYear;
-    Serial.printf("[NVS] Restore baseline bulanan: %.4f kWh (Bln: %d, Thn: %d)\n", energyAwalBulan, savedMon + 1, savedYear);
+    kalenderBulan = savedMon;
+    kalenderTahun = savedYear;
+    Serial.printf(
+        "[NVS] Restore baseline bulanan: %.4f kWh (Bln: %d, Thn: %d)\n",
+        energyAwalBulan, savedMon + 1, savedYear);
   }
 
-  // Restore antrean pending sync periode selesai jika ada rollover saat offline sebelumnya
-  hasPendingDay = energyPrefs.getBool("p_day_pend", false);
-  if (hasPendingDay) {
-    String sDate = energyPrefs.getString("p_day_date", "");
-    strncpy(pendingDayDate, sDate.c_str(), sizeof(pendingDayDate) - 1);
-    pendingDayYear = energyPrefs.getInt("p_day_year", 0);
-    pendingDayKwh  = energyPrefs.getFloat("p_day_kwh", 0.0f);
-    pendingDayCost = energyPrefs.getFloat("p_day_cost", 0.0f);
-    pendingDayWday = energyPrefs.getInt("p_day_wday", 0);
-    Serial.printf("[NVS] Restore pending completed day: %s (%.3f kWh, Rp %.0f)\n",
-      pendingDayDate, pendingDayKwh, pendingDayCost);
+  // Restore antrean pending harian (mendukung minimal 7 hari offline)
+  pendingDayCount = energyPrefs.getInt("p_day_cnt", 0);
+  if (pendingDayCount > MAX_PENDING_DAYS) pendingDayCount = MAX_PENDING_DAYS;
+  for (int i = 0; i < pendingDayCount; i++) {
+    char key[20];
+    snprintf(key, sizeof(key), "pd_d_%d", i);
+    String sDate = energyPrefs.getString(key, "");
+    strncpy(pendingDays[i].date, sDate.c_str(), sizeof(pendingDays[i].date) - 1);
+    pendingDays[i].date[sizeof(pendingDays[i].date) - 1] = '\0';
+    snprintf(key, sizeof(key), "pd_y_%d", i);
+    pendingDays[i].year = energyPrefs.getInt(key, 0);
+    snprintf(key, sizeof(key), "pd_k_%d", i);
+    pendingDays[i].kwh = energyPrefs.getFloat(key, 0.0f);
+    snprintf(key, sizeof(key), "pd_c_%d", i);
+    pendingDays[i].cost = energyPrefs.getFloat(key, 0.0f);
+    snprintf(key, sizeof(key), "pd_w_%d", i);
+    pendingDays[i].wday = energyPrefs.getInt(key, 0);
+    Serial.printf("[NVS] Restore pending hari [%d]: %s (%.3f kWh, Rp %.0f)\n",
+      i, pendingDays[i].date, pendingDays[i].kwh, pendingDays[i].cost);
   }
 
   hasPendingMonth = energyPrefs.getBool("p_mon_pend", false);
@@ -349,33 +388,47 @@ void setup() {
       pendingMonthYear, pendingMonthIdx + 1, pendingMonthKwh, pendingMonthCost);
   }
 
-  // Restore cache bulanan 0..11 untuk akumulasi summary tahunan
-  for (int m = 0; m < 12; m++) {
-    char kE[16], kC[16];
-    snprintf(kE, sizeof(kE), "m_kwh_%d", m);
-    snprintf(kC, sizeof(kC), "m_cost_%d", m);
-    energiBulanCached[m] = energyPrefs.getFloat(kE, 0.0f);
-    biayaBulanCached[m]  = energyPrefs.getFloat(kC, 0.0f);
+  // Restore cache bulanan dipisahkan per tahun
+  cachedYear = energyPrefs.getInt("c_year", 0);
+  if (cachedYear == savedYear && savedYear > 0) {
+    for (int m = 0; m < 12; m++) {
+      char kE[16], kC[16];
+      snprintf(kE, sizeof(kE), "m_kwh_%d", m);
+      snprintf(kC, sizeof(kC), "m_cost_%d", m);
+      energiBulanCached[m] = energyPrefs.getFloat(kE, 0.0f);
+      biayaBulanCached[m]  = energyPrefs.getFloat(kC, 0.0f);
+    }
+    monthlyCacheLoaded = true;
+    Serial.printf("[NVS] Cache bulanan tahun %d dipulihkan (12 bulan).\n", cachedYear);
+  } else {
+    monthlyCacheLoaded = false;
+    for (int m = 0; m < 12; m++) {
+      energiBulanCached[m] = 0.0f;
+      biayaBulanCached[m]  = 0.0f;
+    }
   }
 
   // Baca energi awal PZEM
   float eAwal = pzem.energy();
   if (!isnan(eAwal)) {
-    if (isnan(energyAwalHari))  energyAwalHari  = eAwal;
-    if (isnan(energyAwalBulan)) energyAwalBulan = eAwal;
-    energyKwh             = eAwal;
-    sensorReadSuccess     = true;
+    if (isnan(energyAwalHari))
+      energyAwalHari = eAwal;
+    if (isnan(energyAwalBulan))
+      energyAwalBulan = eAwal;
+    energyKwh = eAwal;
+    sensorReadSuccess = true;
     lastValidReadUptimeMs = millis();
     Serial.printf("[PZEM] Energi awal: %.4f kWh\n", eAwal);
   } else {
-    Serial.println("[PZEM] Pembacaan awal belum berhasil (sensor standby/belum siap).");
+    Serial.println(
+        "[PZEM] Pembacaan awal belum berhasil (sensor standby/belum siap).");
   }
 
   bacaPZEM();
   tampilKondisi();
 
   unsigned long now = millis();
-  waktuHalamanOtomatis  = now;
+  waktuHalamanOtomatis = now;
   waktuBacaPZEMTerakhir = now;
   waktuKirimCloudTerakhir = now;
   waktuBacaCtrlTerakhir = now;
@@ -422,9 +475,11 @@ void loop() {
     } else {
       // Penjadwalan refresh token rollover-safe
       if (sekarang - waktuTokenDidapat >= INTERVAL_REFRESH_TOKEN) {
-        Serial.println("[AUTH] Interval refresh token tercapai. Memperbarui token...");
+        Serial.println(
+            "[AUTH] Interval refresh token tercapai. Memperbarui token...");
         if (!refreshToken()) {
-          Serial.println("[AUTH] Refresh token gagal. Menjadwalkan login ulang...");
+          Serial.println(
+              "[AUTH] Refresh token gagal. Menjadwalkan login ulang...");
           firebaseLogin = false;
         }
       }
@@ -432,19 +487,22 @@ void loop() {
   }
 
   // --- 6. PENGIRIMAN TELEMETRI CLOUD / EMULATOR (Setiap 5 Detik) ---
-  if (wifiTerhubung && firebaseLogin && (sekarang - waktuKirimCloudTerakhir >= INTERVAL_KIRIM_CLOUD)) {
+  if (wifiTerhubung && firebaseLogin &&
+      (sekarang - waktuKirimCloudTerakhir >= INTERVAL_KIRIM_CLOUD)) {
     waktuKirimCloudTerakhir = sekarang;
     kirimTelemetriCloud();
   }
 
   // --- 7. PEMBACAAN PERINTAH KONTROL DARI RTDB (Setiap 3 Detik) ---
-  if (wifiTerhubung && firebaseLogin && (sekarang - waktuBacaCtrlTerakhir >= INTERVAL_BACA_CTRL)) {
+  if (wifiTerhubung && firebaseLogin &&
+      (sekarang - waktuBacaCtrlTerakhir >= INTERVAL_BACA_CTRL)) {
     waktuBacaCtrlTerakhir = sekarang;
     bacaKontrolCloud();
   }
 
   // --- 8. SINKRONISASI HISTORI ENERGI KALENDER KE RTDB (Setiap 30 Detik) ---
-  if (wifiTerhubung && firebaseLogin && (sekarang - waktuKirimHistoriTerakhir >= INTERVAL_KIRIM_HISTORI)) {
+  if (wifiTerhubung && firebaseLogin &&
+      (sekarang - waktuKirimHistoriTerakhir >= INTERVAL_KIRIM_HISTORI)) {
     waktuKirimHistoriTerakhir = sekarang;
     periksaWaktuKalender();
     kirimHistoriCloud();
@@ -465,8 +523,8 @@ void initHardware() {
   tampilPesan("SIMETRI Firebase", "Inisialisasi...");
 
   pinMode(TOMBOL_KONDISI, INPUT_PULLUP);
-  pinMode(TOMBOL_HARI,    INPUT_PULLUP);
-  pinMode(TOMBOL_BULAN,   INPUT_PULLUP);
+  pinMode(TOMBOL_HARI, INPUT_PULLUP);
+  pinMode(TOMBOL_BULAN, INPUT_PULLUP);
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
@@ -484,15 +542,19 @@ void setRelayOutput(bool state) {
 #if ENABLE_RELAY_CONTROL
   // Relay diizinkan beroperasi
   relayOutputState = state;
-  digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? (state ? LOW : HIGH) : (state ? HIGH : LOW));
-  Serial.printf("[RELAY] Output GPIO diubah: %s\n", state ? "ON (Tutup)" : "OFF (Buka)");
+  digitalWrite(RELAY_PIN,
+               RELAY_ACTIVE_LOW ? (state ? LOW : HIGH) : (state ? HIGH : LOW));
+  Serial.printf("[RELAY] Output GPIO diubah: %s\n",
+                state ? "ON (Tutup)" : "OFF (Buka)");
 #else
   // STAGING GUARD: Relay TIDAK diizinkan bergerak
-  // relayOutputState selalu false (OFF), tidak pernah diubah oleh perintah yang diabaikan!
+  // relayOutputState selalu false (OFF), tidak pernah diubah oleh perintah yang
+  // diabaikan!
   relayOutputState = false;
   digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? HIGH : LOW);
-  Serial.printf("[RELAY] Perintah: %s -> DIABAIKAN. Output GPIO tetap OFF (ENABLE_RELAY_CONTROL=false).\n",
-    state ? "ON" : "OFF");
+  Serial.printf("[RELAY] Perintah: %s -> DIABAIKAN. Output GPIO tetap OFF "
+                "(ENABLE_RELAY_CONTROL=false).\n",
+                state ? "ON" : "OFF");
 #endif
 }
 
@@ -508,16 +570,18 @@ void bacaPZEM() {
   float f = pzem.frequency();
   float q = pzem.pf();
 
-  // Validasi pembacaan: tegangan harus valid numerik (bukan NaN) dan bernilai positif
+  // Validasi pembacaan: tegangan harus valid numerik (bukan NaN) dan bernilai
+  // positif
   if (!isnan(v) && v > 0.0f) {
-    voltage            = v;
-    current            = (!isnan(i) && i >= 0.005f) ? i : 0.0f;
-    power              = (!isnan(p) && p >= 0.1f)   ? p : 0.0f;
-    if (!isnan(e)) energyKwh = e;
-    frequency          = (!isnan(f)) ? f : 50.0f;
-    pf                 = (!isnan(q)) ? q : 1.0f;
+    voltage = v;
+    current = (!isnan(i) && i >= 0.005f) ? i : 0.0f;
+    power = (!isnan(p) && p >= 0.1f) ? p : 0.0f;
+    if (!isnan(e))
+      energyKwh = e;
+    frequency = (!isnan(f)) ? f : 50.0f;
+    pf = (!isnan(q)) ? q : 1.0f;
 
-    sensorReadSuccess     = true;
+    sensorReadSuccess = true;
     lastValidReadUptimeMs = millis();
     totalSensorSuccess++;
   } else {
@@ -526,11 +590,11 @@ void bacaPZEM() {
     totalSensorFail++;
     // JANGAN mengganti nilai dengan 0.0f yang tampak valid!
     // Nilai voltage/current/power dibiarkan NaN untuk menandai status invalid.
-    voltage   = NAN;
-    current   = NAN;
-    power     = NAN;
+    voltage = NAN;
+    current = NAN;
+    power = NAN;
     frequency = NAN;
-    pf        = NAN;
+    pf = NAN;
   }
 }
 
@@ -601,7 +665,7 @@ void tampilBulan() {
   lcd.print(lcdBuf);
 }
 
-void tampilPesan(const char* baris1, const char* baris2) {
+void tampilPesan(const char *baris1, const char *baris2) {
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(baris1);
@@ -625,21 +689,30 @@ void tanganiTombol() {
   bool b = digitalRead(TOMBOL_BULAN);
 
   if (tombolKondisiSebelum == HIGH && k == LOW) {
-    halaman = 0; tampilKondisi(); bunyiBuzzer();
-    modeTombol = true; waktuTombolTerakhir = millis();
+    halaman = 0;
+    tampilKondisi();
+    bunyiBuzzer();
+    modeTombol = true;
+    waktuTombolTerakhir = millis();
   }
   if (tombolHariSebelum == HIGH && h == LOW) {
-    halaman = 1; tampilHari(); bunyiBuzzer();
-    modeTombol = true; waktuTombolTerakhir = millis();
+    halaman = 1;
+    tampilHari();
+    bunyiBuzzer();
+    modeTombol = true;
+    waktuTombolTerakhir = millis();
   }
   if (tombolBulanSebelum == HIGH && b == LOW) {
-    halaman = 2; tampilBulan(); bunyiBuzzer();
-    modeTombol = true; waktuTombolTerakhir = millis();
+    halaman = 2;
+    tampilBulan();
+    bunyiBuzzer();
+    modeTombol = true;
+    waktuTombolTerakhir = millis();
   }
 
   tombolKondisiSebelum = k;
-  tombolHariSebelum    = h;
-  tombolBulanSebelum   = b;
+  tombolHariSebelum = h;
+  tombolBulanSebelum = b;
 
   if (modeTombol) {
     if (millis() - waktuTombolTerakhir >= WAKTU_TAMPIL_TOMBOL) {
@@ -655,9 +728,12 @@ void rotasiHalamanOtomatis() {
   if (millis() - waktuHalamanOtomatis >= INTERVAL_HALAMAN) {
     waktuHalamanOtomatis = millis();
     halaman = (halaman + 1) % 3;
-    if      (halaman == 0) tampilKondisi();
-    else if (halaman == 1) tampilHari();
-    else if (halaman == 2) tampilBulan();
+    if (halaman == 0)
+      tampilKondisi();
+    else if (halaman == 1)
+      tampilHari();
+    else if (halaman == 2)
+      tampilBulan();
   }
 }
 
@@ -672,10 +748,13 @@ void kelolaKoneksiWiFi(unsigned long sekarang) {
     if (!wifiTerhubung) {
       wifiTerhubung = true;
       Serial.printf("[WiFi] Terhubung sukses. IP: %s | RSSI: %d dBm\n",
-        WiFi.localIP().toString().c_str(), WiFi.RSSI());
-      // Sinkronisasi waktu sistem via SNTP (WIB UTC+7) penting untuk validasi kalender & sertifikat TLS (X.509)
-      Serial.println("[NTP] Mengonfigurasi sinkronisasi waktu SNTP (WIB UTC+7)...");
-      configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.google.com");
+                    WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      // Sinkronisasi waktu sistem via SNTP (WIB UTC+7) penting untuk validasi
+      // kalender & sertifikat TLS (X.509)
+      Serial.println(
+          "[NTP] Mengonfigurasi sinkronisasi waktu SNTP (WIB UTC+7)...");
+      configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org",
+                 "time.google.com");
     }
   } else {
     if (wifiTerhubung) {
@@ -710,7 +789,8 @@ String buildAuthUrl() {
   return url;
 #else
   // Cloud Google Auth via HTTPS
-  String url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=";
+  String url = "https://identitytoolkit.googleapis.com/v1/"
+               "accounts:signInWithPassword?key=";
   url += FIREBASE_API_KEY;
   return url;
 #endif
@@ -838,10 +918,12 @@ bool loginFirebase() {
   Serial.println("[AUTH] Memulai autentikasi ke Firebase...");
 
 #if !USE_FIREBASE_EMULATOR
-  // Pastikan jam sistem sudah tersinkronisasi via SNTP agar verifikasi sertifikat TLS valid
+  // Pastikan jam sistem sudah tersinkronisasi via SNTP agar verifikasi
+  // sertifikat TLS valid
   time_t nowSec = time(nullptr);
   if (nowSec < 1600000000) {
-    Serial.println("[NTP] Menunggu sinkronisasi waktu sebelum autentikasi TLS...");
+    Serial.println(
+        "[NTP] Menunggu sinkronisasi waktu sebelum autentikasi TLS...");
     int ntpWait = 0;
     while (time(nullptr) < 1600000000 && ntpWait < 15) {
       delay(200);
@@ -851,7 +933,8 @@ bool loginFirebase() {
     if (nowSec >= 1600000000) {
       Serial.printf("[NTP] Waktu sistem tersinkronisasi: %ld\n", (long)nowSec);
     } else {
-      Serial.println("[NTP] Peringatan: Jam sistem belum sinkron. Handshake TLS mungkin gagal.");
+      Serial.println("[NTP] Peringatan: Jam sistem belum sinkron. Handshake "
+                     "TLS mungkin gagal.");
     }
   }
 #endif
@@ -868,7 +951,8 @@ bool loginFirebase() {
   }
 #else
   WiFiClientSecure secureClient;
-  secureClient.setCACert(GOOGLE_ROOT_CA); // Verifikasi CA Root asli, TANPA setInsecure()!
+  secureClient.setCACert(
+      GOOGLE_ROOT_CA); // Verifikasi CA Root asli, TANPA setInsecure()!
   if (!http.begin(secureClient, url)) {
     Serial.println("[AUTH] Gagal inisialisasi HTTPClient secure.");
     return false;
@@ -878,8 +962,8 @@ bool loginFirebase() {
   http.addHeader("Content-Type", "application/json");
 
   StaticJsonDocument<256> reqDoc;
-  reqDoc["email"]             = DEVICE_EMAIL;
-  reqDoc["password"]          = DEVICE_PASSWORD;
+  reqDoc["email"] = DEVICE_EMAIL;
+  reqDoc["password"] = DEVICE_PASSWORD;
   reqDoc["returnSecureToken"] = true;
 
   String bodyStr;
@@ -893,7 +977,7 @@ bool loginFirebase() {
       String resp = http.getString();
       StaticJsonDocument<256> errDoc;
       if (deserializeJson(errDoc, resp) == DeserializationError::Ok) {
-        const char* errMsg = errDoc["error"]["message"] | "unknown";
+        const char *errMsg = errDoc["error"]["message"] | "unknown";
         Serial.printf("[AUTH] Alasan: %s\n", errMsg);
       }
     }
@@ -918,7 +1002,7 @@ bool loginFirebase() {
     return false;
   }
 
-  String idTok  = doc["idToken"].as<String>();
+  String idTok = doc["idToken"].as<String>();
   String refTok = doc["refreshToken"].as<String>();
 
   if (idTok.isEmpty() || refTok.isEmpty()) {
@@ -926,11 +1010,12 @@ bool loginFirebase() {
     return false;
   }
 
-  firebaseIdToken    = idTok;
+  firebaseIdToken = idTok;
   firebaseRefreshTkn = refTok;
-  waktuTokenDidapat  = millis();
+  waktuTokenDidapat = millis();
 
-  Serial.println("[AUTH] Login berhasil! ID Token dan Refresh Token tersimpan.");
+  Serial.println(
+      "[AUTH] Login berhasil! ID Token dan Refresh Token tersimpan.");
   return true;
 }
 
@@ -950,11 +1035,13 @@ bool refreshToken() {
 
 #if USE_FIREBASE_EMULATOR
   WiFiClient plainClient;
-  if (!http.begin(plainClient, url)) return false;
+  if (!http.begin(plainClient, url))
+    return false;
 #else
   WiFiClientSecure secureClient;
   secureClient.setCACert(GOOGLE_ROOT_CA);
-  if (!http.begin(secureClient, url)) return false;
+  if (!http.begin(secureClient, url))
+    return false;
 #endif
 
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
@@ -979,7 +1066,7 @@ bool refreshToken() {
   }
 
   // Google token endpoint mengembalikan "id_token" dan "refresh_token"
-  String newIdTok  = doc["id_token"].as<String>();
+  String newIdTok = doc["id_token"].as<String>();
   String newRefTok = doc["refresh_token"].as<String>();
 
   if (newIdTok.isEmpty()) {
@@ -987,7 +1074,7 @@ bool refreshToken() {
     return false;
   }
 
-  firebaseIdToken   = newIdTok;
+  firebaseIdToken = newIdTok;
   if (!newRefTok.isEmpty()) {
     firebaseRefreshTkn = newRefTok;
   }
@@ -1007,7 +1094,8 @@ bool kirimTelemetriCloud() {
   }
 
   unsigned long sekarang = millis();
-  unsigned long usiaPembacaanMs = (lastValidReadUptimeMs > 0) ? (sekarang - lastValidReadUptimeMs) : 0;
+  unsigned long usiaPembacaanMs =
+      (lastValidReadUptimeMs > 0) ? (sekarang - lastValidReadUptimeMs) : 0;
 
   String url = buildRtdbLiveUrl();
   HTTPClient http;
@@ -1015,11 +1103,13 @@ bool kirimTelemetriCloud() {
 
 #if USE_FIREBASE_EMULATOR
   WiFiClient plainClient;
-  if (!http.begin(plainClient, url)) return false;
+  if (!http.begin(plainClient, url))
+    return false;
 #else
   WiFiClientSecure secureClient;
   secureClient.setCACert(GOOGLE_ROOT_CA);
-  if (!http.begin(secureClient, url)) return false;
+  if (!http.begin(secureClient, url))
+    return false;
 #endif
 
   http.addHeader("Content-Type", "application/json");
@@ -1027,44 +1117,45 @@ bool kirimTelemetriCloud() {
   StaticJsonDocument<768> doc;
 
   // Status validitas sensor eksplisit
-  doc["sensor_valid"]         = sensorReadSuccess;
-  doc["reading_age_ms"]       = usiaPembacaanMs;
-  doc["last_read_uptime_ms"]  = lastValidReadUptimeMs;
+  doc["sensor_valid"] = sensorReadSuccess;
+  doc["reading_age_ms"] = usiaPembacaanMs;
+  doc["last_read_uptime_ms"] = lastValidReadUptimeMs;
 
-  // Hanya isi nilai jika pembacaan sensor berhasil; jika gagal kirim null (jangan angka 0 palsu)
+  // Hanya isi nilai jika pembacaan sensor berhasil; jika gagal kirim null
+  // (jangan angka 0 palsu)
   if (sensorReadSuccess && !isnan(voltage)) {
-    doc["voltage"]            = voltage;
-    doc["current"]            = current;
-    doc["power"]              = power;
-    doc["frequency"]          = frequency;
-    doc["power_factor"]       = pf;
+    doc["voltage"] = voltage;
+    doc["current"] = current;
+    doc["power"] = power;
+    doc["frequency"] = frequency;
+    doc["power_factor"] = pf;
   } else {
-    doc["voltage"]            = nullptr;
-    doc["current"]            = nullptr;
-    doc["power"]              = nullptr;
-    doc["frequency"]          = nullptr;
-    doc["power_factor"]       = nullptr;
-    doc["sensor_status"]      = "stale_or_disconnected";
+    doc["voltage"] = nullptr;
+    doc["current"] = nullptr;
+    doc["power"] = nullptr;
+    doc["frequency"] = nullptr;
+    doc["power_factor"] = nullptr;
+    doc["sensor_status"] = "stale_or_disconnected";
   }
 
   float dailyCost = (float)roundf(energiHari * tarifPerKwh);
   float monthlyCost = (float)roundf(energiBulan * tarifPerKwh);
 
-  doc["energy_kwh"]           = isnan(energyKwh) ? (float)0.0 : energyKwh;
-  doc["daily_energy"]         = energiHari;
-  doc["monthly_energy"]       = energiBulan;
-  doc["daily_cost"]           = dailyCost;
-  doc["monthly_cost"]         = monthlyCost;
-  doc["tariff_per_kwh"]       = tarifPerKwh;
+  doc["energy_kwh"] = isnan(energyKwh) ? (float)0.0 : energyKwh;
+  doc["daily_energy"] = energiHari;
+  doc["monthly_energy"] = energiBulan;
+  doc["daily_cost"] = dailyCost;
+  doc["monthly_cost"] = monthlyCost;
+  doc["tariff_per_kwh"] = tarifPerKwh;
 
   // Pemisahan status relay
-  doc["requested_power"]      = requestedPower;
-  doc["relay_output_state"]   = relayOutputState;
+  doc["requested_power"] = requestedPower;
+  doc["relay_output_state"] = relayOutputState;
   doc["relay_control_enabled"] = relayControlEnabled;
 
   // Uptime terpisah dari server timestamp
-  doc["uptime_ms"]            = sekarang;
-  doc["sent_uptime_ms"]       = sekarang;
+  doc["uptime_ms"] = sekarang;
+  doc["sent_uptime_ms"] = sekarang;
 
   // Firebase Realtime Database Server Timestamp
   JsonObject serverTs = doc.createNestedObject("server_timestamp");
@@ -1077,18 +1168,21 @@ bool kirimTelemetriCloud() {
 
   if (httpCode == 200 || httpCode == 204) {
     if (sensorReadSuccess) {
-      Serial.printf("[RTDB] Telemetri terkirim: V=%.1fV P=%.1fW kWh=%.4f (age: %lu ms)\n",
-        voltage, power, energyKwh, usiaPembacaanMs);
+      Serial.printf(
+          "[RTDB] Telemetri terkirim: V=%.1fV P=%.1fW kWh=%.4f (age: %lu ms)\n",
+          voltage, power, energyKwh, usiaPembacaanMs);
     } else {
-      Serial.printf("[RTDB] Status telemetri terkirim: SENSOR ERROR/STALE (age: %lu ms)\n",
-        usiaPembacaanMs);
+      Serial.printf("[RTDB] Status telemetri terkirim: SENSOR ERROR/STALE "
+                    "(age: %lu ms)\n",
+                    usiaPembacaanMs);
     }
     http.end();
     return true;
   } else {
     Serial.printf("[RTDB] Gagal kirim telemetri. HTTP: %d\n", httpCode);
     if (httpCode == 401) {
-      Serial.println("[RTDB] Unauthorized (token expired). Memicu login ulang.");
+      Serial.println(
+          "[RTDB] Unauthorized (token expired). Memicu login ulang.");
       firebaseLogin = false;
     }
     http.end();
@@ -1111,11 +1205,13 @@ bool bacaKontrolCloud() {
 
 #if USE_FIREBASE_EMULATOR
   WiFiClient plainClient;
-  if (!http.begin(plainClient, url)) return false;
+  if (!http.begin(plainClient, url))
+    return false;
 #else
   WiFiClientSecure secureClient;
   secureClient.setCACert(GOOGLE_ROOT_CA);
-  if (!http.begin(secureClient, url)) return false;
+  if (!http.begin(secureClient, url))
+    return false;
 #endif
 
   int httpCode = http.GET();
@@ -1135,16 +1231,20 @@ bool bacaKontrolCloud() {
         requestedPower = p;
         setRelayOutput(p);
       }
-      // 2. Parsing tarif listrik per kWh (validasi numerik positif dan masuk akal)
+      // 2. Parsing tarif listrik per kWh (validasi numerik positif dan masuk
+      // akal)
       if (ctrlDoc.containsKey("tariff_per_kwh")) {
         float newTariff = ctrlDoc["tariff_per_kwh"].as<float>();
         if (!isnan(newTariff) && newTariff >= 100.0f && newTariff <= 50000.0f) {
           if (fabs(tarifPerKwh - newTariff) > 0.01f) {
             tarifPerKwh = newTariff;
-            Serial.printf("[CTRL] Tarif listrik baru diterapkan: Rp %.2f /kWh\n", tarifPerKwh);
+            Serial.printf(
+                "[CTRL] Tarif listrik baru diterapkan: Rp %.2f /kWh\n",
+                tarifPerKwh);
           }
         } else {
-          Serial.printf("[CTRL] Nilai tarif tidak valid (%.2f) — diabaikan.\n", newTariff);
+          Serial.printf("[CTRL] Nilai tarif tidak valid (%.2f) — diabaikan.\n",
+                        newTariff);
         }
       }
       return true;
@@ -1160,7 +1260,8 @@ bool bacaKontrolCloud() {
       return true;
     } else {
       // Nilai adalah null, kosong, atau string lain: JANGAN ubah status relay!
-      Serial.printf("[CTRL] Nilai kontrol tidak dikenali ('%s') — diabaikan.\n", resp.c_str());
+      Serial.printf("[CTRL] Nilai kontrol tidak dikenali ('%s') — diabaikan.\n",
+                    resp.c_str());
       return false;
     }
   } else if (httpCode == 401) {
@@ -1172,6 +1273,49 @@ bool bacaKontrolCloud() {
     http.end();
     return false;
   }
+}
+
+// ============================================================
+//  PEMANTAUAN KALENDER (WIB UTC+7) & ROLLOVER ENERGI HARIAN/BULANAN
+// ============================================================
+
+// ============================================================
+//  PENGELOLAAN ANTREAN HARI SELESAI SAAT OFFLINE (FIFO NVS)
+// ============================================================
+
+void antrekanHariSelesai(const char* dateStr, int year, float kwh, float cost, int wday) {
+  // Jika antrean mencapai batas maksimum (7 hari), geser FIFO (hapus catatan tertua)
+  if (pendingDayCount >= MAX_PENDING_DAYS) {
+    for (int i = 0; i < MAX_PENDING_DAYS - 1; i++) {
+      pendingDays[i] = pendingDays[i + 1];
+    }
+    pendingDayCount = MAX_PENDING_DAYS - 1;
+  }
+
+  strncpy(pendingDays[pendingDayCount].date, dateStr, sizeof(pendingDays[pendingDayCount].date) - 1);
+  pendingDays[pendingDayCount].date[sizeof(pendingDays[pendingDayCount].date) - 1] = '\0';
+  pendingDays[pendingDayCount].year = year;
+  pendingDays[pendingDayCount].kwh  = kwh;
+  pendingDays[pendingDayCount].cost = cost;
+  pendingDays[pendingDayCount].wday = wday;
+  pendingDayCount++;
+
+  energyPrefs.putInt("p_day_cnt", pendingDayCount);
+  for (int i = 0; i < pendingDayCount; i++) {
+    char key[20];
+    snprintf(key, sizeof(key), "pd_d_%d", i);
+    energyPrefs.putString(key, pendingDays[i].date);
+    snprintf(key, sizeof(key), "pd_y_%d", i);
+    energyPrefs.putInt(key, pendingDays[i].year);
+    snprintf(key, sizeof(key), "pd_k_%d", i);
+    energyPrefs.putFloat(key, pendingDays[i].kwh);
+    snprintf(key, sizeof(key), "pd_c_%d", i);
+    energyPrefs.putFloat(key, pendingDays[i].cost);
+    snprintf(key, sizeof(key), "pd_w_%d", i);
+    energyPrefs.putInt(key, pendingDays[i].wday);
+  }
+  Serial.printf("[NVS] Hari %s diantrekan (slot %d/%d, %.3f kWh, Rp %.0f)\n",
+    dateStr, pendingDayCount, MAX_PENDING_DAYS, kwh, cost);
 }
 
 // ============================================================
@@ -1192,20 +1336,20 @@ bool periksaWaktuKalender() {
 
   int tahun = timeinfo.tm_year + 1900;
   int bulan = timeinfo.tm_mon;            // 0..11
-  int hari  = timeinfo.tm_mday;           // 1..31
+  int hari = timeinfo.tm_mday;            // 1..31
   int hariM = (timeinfo.tm_wday + 6) % 7; // 0=Senin .. 6=Minggu
 
   if (!waktuKalenderValid) {
     waktuKalenderValid = true;
     kalenderTahun = tahun;
     kalenderBulan = bulan;
-    kalenderHari  = hari;
+    kalenderHari = hari;
     kalenderHariMinggu = hariM;
     snprintf(kalenderTanggalStr, sizeof(kalenderTanggalStr), "%04d-%02d-%02d", tahun, bulan + 1, hari);
 
     int savedYear = energyPrefs.getInt("cal_year", 0);
-    int savedMon  = energyPrefs.getInt("cal_mon", -1);
-    int savedDay  = energyPrefs.getInt("cal_day", 0);
+    int savedMon = energyPrefs.getInt("cal_mon", -1);
+    int savedDay = energyPrefs.getInt("cal_day", 0);
 
     // Cek apakah tanggal saat ini berbeda dari tanggal NVS (restart setelah ganti hari/bulan saat offline)
     if (savedYear > 0 && (savedYear != tahun || savedMon != bulan || savedDay != hari)) {
@@ -1216,19 +1360,9 @@ bool periksaWaktuKalender() {
         float lastDayKwh = max(0.0f, energyKwh - energyAwalHari);
         float lastDayCost = (float)roundf(lastDayKwh * tarifPerKwh);
 
-        snprintf(pendingDayDate, sizeof(pendingDayDate), "%04d-%02d-%02d", savedYear, savedMon + 1, savedDay);
-        pendingDayYear = savedYear;
-        pendingDayKwh  = lastDayKwh;
-        pendingDayCost = lastDayCost;
-        pendingDayWday = (timeinfo.tm_wday + 5) % 7;
-        hasPendingDay  = true;
-
-        energyPrefs.putString("p_day_date", pendingDayDate);
-        energyPrefs.putInt("p_day_year", pendingDayYear);
-        energyPrefs.putFloat("p_day_kwh", pendingDayKwh);
-        energyPrefs.putFloat("p_day_cost", pendingDayCost);
-        energyPrefs.putInt("p_day_wday", pendingDayWday);
-        energyPrefs.putBool("p_day_pend", true);
+        char dStr[16];
+        snprintf(dStr, sizeof(dStr), "%04d-%02d-%02d", savedYear, savedMon + 1, savedDay);
+        antrekanHariSelesai(dStr, savedYear, lastDayKwh, lastDayCost, (timeinfo.tm_wday + 5) % 7);
       }
 
       if (!isnan(energyKwh)) {
@@ -1257,24 +1391,22 @@ bool periksaWaktuKalender() {
       kalenderTanggalStr, tahun, bulan + 1, hari);
 
     if (!isnan(energyKwh)) {
-      // Simpan hari yang selesai ke antrean pending
-      snprintf(pendingDayDate, sizeof(pendingDayDate), "%04d-%02d-%02d", kalenderTahun, kalenderBulan + 1, kalenderHari);
-      pendingDayYear = kalenderTahun;
-      pendingDayKwh  = energiHari;
-      pendingDayCost = (float)roundf(energiHari * tarifPerKwh);
-      pendingDayWday = kalenderHariMinggu;
-      hasPendingDay  = true;
+      // Simpan hari yang selesai ke antrean pending harian (mendukung minimal 7 hari offline)
+      char dStr[16];
+      snprintf(dStr, sizeof(dStr), "%04d-%02d-%02d", kalenderTahun, kalenderBulan + 1, kalenderHari);
+      float finalDayKwh = energiHari;
+      float finalDayCost = (float)roundf(energiHari * tarifPerKwh);
+      antrekanHariSelesai(dStr, kalenderTahun, finalDayKwh, finalDayCost, kalenderHariMinggu);
 
-      energyPrefs.putString("p_day_date", pendingDayDate);
-      energyPrefs.putInt("p_day_year", pendingDayYear);
-      energyPrefs.putFloat("p_day_kwh", pendingDayKwh);
-      energyPrefs.putFloat("p_day_cost", pendingDayCost);
-      energyPrefs.putInt("p_day_wday", pendingDayWday);
-      energyPrefs.putBool("p_day_pend", true);
+      // Jika minggu berganti (Senin baru), tandai untuk reset grafik mingguan di RTDB
+      if (hariM == 0 && kalenderHariMinggu != 0) {
+        perluResetMingguan = true;
+      }
 
       // Jika bulan juga berganti
       if (bulan != kalenderBulan || tahun != kalenderTahun) {
-        Serial.printf("[KALENDER] Rollover bulan terdeteksi: %02d -> %02d\n", kalenderBulan + 1, bulan + 1);
+        Serial.printf("[KALENDER] Rollover bulan terdeteksi: %02d -> %02d\n",
+                      kalenderBulan + 1, bulan + 1);
         pendingMonthYear = kalenderTahun;
         pendingMonthIdx  = kalenderBulan;
         pendingMonthKwh  = energiBulan;
@@ -1287,7 +1419,7 @@ bool periksaWaktuKalender() {
         energyPrefs.putFloat("p_mon_cost", pendingMonthCost);
         energyPrefs.putBool("p_mon_pend", true);
 
-        // Catat ke cache bulanan tahunan
+        // Catat ke cache bulanan tahunan dengan identitas tahun
         energiBulanCached[kalenderBulan] = pendingMonthKwh;
         biayaBulanCached[kalenderBulan]  = pendingMonthCost;
         char kE[16], kC[16];
@@ -1295,6 +1427,8 @@ bool periksaWaktuKalender() {
         snprintf(kC, sizeof(kC), "m_cost_%d", kalenderBulan);
         energyPrefs.putFloat(kE, pendingMonthKwh);
         energyPrefs.putFloat(kC, pendingMonthCost);
+        energyPrefs.putInt("c_year", kalenderTahun);
+        cachedYear = kalenderTahun;
 
         // Reset baseline bulan baru
         energyAwalBulan = energyKwh;
@@ -1314,7 +1448,10 @@ bool periksaWaktuKalender() {
             energyPrefs.putFloat(ckE, 0.0f);
             energyPrefs.putFloat(ckC, 0.0f);
           }
+          energyPrefs.putInt("c_year", tahun);
+          cachedYear = tahun;
           tahunTerdaftarDiCloud = 0;
+          monthlyCacheLoaded = false;
         }
       }
 
@@ -1327,10 +1464,12 @@ bool periksaWaktuKalender() {
 
     kalenderTahun = tahun;
     kalenderBulan = bulan;
-    kalenderHari  = hari;
+    kalenderHari = hari;
     kalenderHariMinggu = hariM;
     snprintf(kalenderTanggalStr, sizeof(kalenderTanggalStr), "%04d-%02d-%02d", tahun, bulan + 1, hari);
     energyPrefs.putString("cal_date", kalenderTanggalStr);
+    energyPrefs.putInt("cal_year", tahun);
+    energyPrefs.putInt("cal_mon", bulan);
   }
 
   return true;
@@ -1480,10 +1619,17 @@ bool muatRiwayatBulananDariCloud() {
       }
     }
     monthlyCacheLoaded = true;
+    energyPrefs.putInt("c_year", kalenderTahun);
+    for (int m = 0; m < 12; m++) {
+      char kE[16];
+      snprintf(kE, sizeof(kE), "m_kwh_%d", m);
+      energyPrefs.putFloat(kE, energiBulanCached[m]);
+    }
     Serial.println("[HISTORI] Riwayat energi bulanan tahunan tersinkronisasi dari RTDB.");
     return true;
   }
   http.end();
+  Serial.printf("[HISTORI] Gagal memuat riwayat bulanan (HTTP %d). Cache lama dipertahankan.\n", code);
   return false;
 }
 
@@ -1492,7 +1638,8 @@ bool muatRiwayatBulananDariCloud() {
 // ============================================================
 
 bool kirimHistoriCloud() {
-  if (firebaseIdToken.isEmpty() || !waktuKalenderValid || kalenderTahun < 2024 || isnan(energyKwh)) {
+  if (firebaseIdToken.isEmpty() || !waktuKalenderValid ||
+      kalenderTahun < 2024 || isnan(energyKwh)) {
     return false;
   }
 
@@ -1510,11 +1657,13 @@ bool kirimHistoriCloud() {
 
 #if USE_FIREBASE_EMULATOR
   WiFiClient plainClient;
-  if (!http.begin(plainClient, url)) return false;
+  if (!http.begin(plainClient, url))
+    return false;
 #else
   WiFiClientSecure secureClient;
   secureClient.setCACert(GOOGLE_ROOT_CA);
-  if (!http.begin(secureClient, url)) return false;
+  if (!http.begin(secureClient, url))
+    return false;
 #endif
 
   http.addHeader("Content-Type", "application/json");
@@ -1548,10 +1697,22 @@ bool kirimHistoriCloud() {
   tsDaily[".sv"] = "timestamp";
 
   // B. Ringkasan Mingguan untuk Grafik 7-Hari Aplikasi (Senin=0 .. Minggu=6)
-  snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_energy/%d", kalenderTahun, kalenderHariMinggu);
+  snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_energy/%d", kalenderTahun,
+           kalenderHariMinggu);
   doc[keyBuf] = energiHari;
-  snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_cost/%d", kalenderTahun, kalenderHariMinggu);
+  snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_cost/%d", kalenderTahun,
+           kalenderHariMinggu);
   doc[keyBuf] = dailyCost;
+
+  // Reset sisa hari di minggu baru agar tidak ada nilai sisa dari minggu lalu
+  if (perluResetMingguan) {
+    for (int d = 1; d < 7; d++) {
+      snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_energy/%d", kalenderTahun, d);
+      doc[keyBuf] = 0.0f;
+      snprintf(keyBuf, sizeof(keyBuf), "%d/weekly_cost/%d", kalenderTahun, d);
+      doc[keyBuf] = 0.0f;
+    }
+  }
 
   // C. Ringkasan Bulanan (Januari=0 .. Desember=11)
   snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", kalenderTahun, kalenderBulan);
@@ -1559,24 +1720,31 @@ bool kirimHistoriCloud() {
   snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_cost/%d", kalenderTahun, kalenderBulan);
   doc[keyBuf] = monthlyCost;
 
-  // D. Summary Tahunan Nyata (Akumulasi seluruh bulan yang tersedia di tahun ini)
-  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_energy", kalenderTahun);
-  doc[keyBuf] = totalTahunEnergi;
-  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_cost", kalenderTahun);
-  doc[keyBuf] = totalTahunBiaya;
-  snprintf(keyBuf, sizeof(keyBuf), "%d/summary/last_updated", kalenderTahun);
-  JsonObject tsSummary = doc.createNestedObject(keyBuf);
-  tsSummary[".sv"] = "timestamp";
-
-  // E. Sinkronisasi Periode Pending (jika sempat rollover saat offline)
-  if (hasPendingDay && strlen(pendingDayDate) > 0) {
-    snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/energy_kwh", pendingDayYear, pendingDayDate);
-    doc[keyBuf] = pendingDayKwh;
-    snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/cost_rp", pendingDayYear, pendingDayDate);
-    doc[keyBuf] = pendingDayCost;
-    snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/day_of_week", pendingDayYear, pendingDayDate);
-    doc[keyBuf] = pendingDayWday;
+  // D. Summary Tahunan: HANYA ditulis jika riwayat seluruh bulan terkonfirmasi (tidak boleh menimpa parsial/nol)
+  if (monthlyCacheLoaded || kalenderBulan == 0) {
+    snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_energy", kalenderTahun);
+    doc[keyBuf] = totalTahunEnergi;
+    snprintf(keyBuf, sizeof(keyBuf), "%d/summary/total_cost", kalenderTahun);
+    doc[keyBuf] = totalTahunBiaya;
+    snprintf(keyBuf, sizeof(keyBuf), "%d/summary/last_updated", kalenderTahun);
+    JsonObject tsSummary = doc.createNestedObject(keyBuf);
+    tsSummary[".sv"] = "timestamp";
+  } else {
+    Serial.println("[HISTORI] Riwayat tahunan belum terkonfirmasi; summary di RTDB tidak ditimpa.");
   }
+
+  // E. Sinkronisasi Antrean Hari Selesai (Multi-day Pending Queue)
+  for (int i = 0; i < pendingDayCount; i++) {
+    if (strlen(pendingDays[i].date) > 0) {
+      snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/energy_kwh", pendingDays[i].year, pendingDays[i].date);
+      doc[keyBuf] = pendingDays[i].kwh;
+      snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/cost_rp", pendingDays[i].year, pendingDays[i].date);
+      doc[keyBuf] = pendingDays[i].cost;
+      snprintf(keyBuf, sizeof(keyBuf), "%d/daily_history/%s/day_of_week", pendingDays[i].year, pendingDays[i].date);
+      doc[keyBuf] = pendingDays[i].wday;
+    }
+  }
+
   if (hasPendingMonth && pendingMonthIdx >= 0) {
     snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", pendingMonthYear, pendingMonthIdx);
     doc[keyBuf] = pendingMonthKwh;
@@ -1593,13 +1761,16 @@ bool kirimHistoriCloud() {
     Serial.printf("[HISTORI] Sinkronisasi sukses (Tgl: %s | Bln %d=%.3fkWh | Thn %d=%.3fkWh Rp%.0f)\n",
       kalenderTanggalStr, kalenderBulan + 1, energiBulan, kalenderTahun, totalTahunEnergi, totalTahunBiaya);
 
-    if (hasPendingDay) {
-      hasPendingDay = false;
-      energyPrefs.putBool("p_day_pend", false);
+    if (pendingDayCount > 0) {
+      pendingDayCount = 0;
+      energyPrefs.putInt("p_day_cnt", 0);
     }
     if (hasPendingMonth) {
       hasPendingMonth = false;
       energyPrefs.putBool("p_mon_pend", false);
+    }
+    if (perluResetMingguan) {
+      perluResetMingguan = false;
     }
 
     http.end();
@@ -1607,11 +1778,11 @@ bool kirimHistoriCloud() {
   } else {
     Serial.printf("[HISTORI] Gagal sinkronisasi histori. HTTP: %d\n", httpCode);
     if (httpCode == 401) {
-      Serial.println("[HISTORI] Unauthorized (token expired). Memicu login ulang.");
+      Serial.println(
+          "[HISTORI] Unauthorized (token expired). Memicu login ulang.");
       firebaseLogin = false;
     }
     http.end();
     return false;
   }
 }
-
