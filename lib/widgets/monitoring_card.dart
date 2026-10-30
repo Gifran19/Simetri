@@ -407,7 +407,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     child: GaugeMeter(
                       value: isReadingOk ? widget.current / 5 : 0.0,
                       valueText: isReadingOk
-                          ? widget.current.toStringAsFixed(3)
+                          ? widget.current.toStringAsFixed(2)
                           : '--',
                       unitText: 'A',
                       title: 'Arus',
@@ -497,7 +497,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
       case 2:
       default:
         title = 'Kuat Arus';
-        valueText = isLive ? widget.current.toStringAsFixed(3) : '--';
+        valueText = isLive ? widget.current.toStringAsFixed(2) : '--';
         unit = 'Ampere';
         progress = isLive ? (widget.current / 5).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xffF9D423), Color(0xffB7FF00), Color(0xff70E000)];
