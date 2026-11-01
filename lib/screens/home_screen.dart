@@ -964,6 +964,7 @@ class _HomeScreenState extends State<HomeScreen> {
         DailyEnergyChart(
           data: _isConnected ? _device.dailyHistory : const [],
           isConnected: _isConnected,
+          deviceId: DeviceService.deviceIdNotifier.value,
         ),
         const SizedBox(height: 18),
 
@@ -1083,6 +1084,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   DailyEnergyChart(
                     data: _isConnected ? _device.dailyHistory : const [],
                     isConnected: _isConnected,
+                    deviceId: DeviceService.deviceIdNotifier.value,
                   ),
                   const SizedBox(height: 16),
 

@@ -183,6 +183,28 @@ void main() {
       expect(find.text('Pemakaian Energi Harian'), findsOneWidget);
       expect(find.text('Jum'), findsOneWidget);
     });
+
+    testWidgets('9. DailyEnergyChart menampilkan tombol kalender, tombol navigasi minggu, dan label tanggal', (tester) async {
+      final weeklyData = [0.0, 0.0, 0.0, 0.0, 0.010, 0.0, 0.0];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DailyEnergyChart(
+              data: weeklyData,
+              isConnected: true,
+            ),
+          ),
+        ),
+      );
+
+      // Icon kalender untuk memilih tanggal harus ada
+      expect(find.byIcon(Icons.calendar_month_rounded), findsOneWidget);
+      // Tombol navigasi minggu lalu harus ada
+      expect(find.text('Minggu Lalu'), findsOneWidget);
+      // Status 'Minggu Ini' harus ada
+      expect(find.text('Minggu Ini'), findsOneWidget);
+    });
   });
 }
 
