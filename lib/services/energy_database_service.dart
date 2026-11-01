@@ -257,9 +257,9 @@ class EnergyDatabaseService {
           .get()
           .timeout(const Duration(seconds: 2));
 
+      final result = List<double>.filled(7, 0.0);
       if (historySnap.exists && historySnap.value != null && historySnap.value is Map) {
         final historyMap = historySnap.value as Map;
-        final result = List<double>.filled(7, 0.0);
         for (int i = 0; i < 7; i++) {
           final dateKey = currentWeekDates[i];
           final entry = historyMap[dateKey];
@@ -267,34 +267,34 @@ class EnergyDatabaseService {
             result[i] = (entry['energy_kwh'] as num).toDouble();
           }
         }
-        return result;
       }
 
-      // 2. Fallback pembacaan ke weekly_energy dibatasi hanya hari <= hari ini
+      // 2. Fallback pembacaan ke weekly_energy jika ada hari yang belum tercatat
       final snapshot = await db
           .ref('energy_data/$devId/$year/weekly_energy')
           .get()
           .timeout(const Duration(seconds: 2));
 
-      if (!snapshot.exists || snapshot.value == null) {
-        return List.filled(7, 0.0);
-      }
+      if (snapshot.exists && snapshot.value != null) {
+        final raw = snapshot.value;
+        final activeDayIndex = now.weekday - 1; // 0=Sen .. 6=Min
 
-      final raw = snapshot.value;
-      final result = List<double>.filled(7, 0.0);
-      final activeDayIndex = now.weekday - 1; // 0=Sen .. 6=Min
-
-      if (raw is Map) {
-        raw.forEach((key, val) {
-          final idx = int.tryParse(key.toString());
-          if (idx != null && idx >= 0 && idx <= activeDayIndex && idx < 7 && val is num) {
-            result[idx] = val.toDouble();
+        if (raw is Map) {
+          raw.forEach((key, val) {
+            final idx = int.tryParse(key.toString());
+            if (idx != null && idx >= 0 && idx <= activeDayIndex && idx < 7 && val is num) {
+              if (result[idx] == 0.0) {
+                result[idx] = val.toDouble();
+              }
+            }
+          });
+        } else if (raw is List) {
+          for (int i = 0; i <= activeDayIndex && i < raw.length && i < 7; i++) {
+            final val = raw[i];
+            if (val is num && result[i] == 0.0) {
+              result[i] = val.toDouble();
+            }
           }
-        });
-      } else if (raw is List) {
-        for (int i = 0; i <= activeDayIndex && i < raw.length && i < 7; i++) {
-          final val = raw[i];
-          if (val is num) result[i] = val.toDouble();
         }
       }
       return result;
@@ -318,8 +318,8 @@ class EnergyDatabaseService {
     final now = DateTime.now();
     final year = now.year;
 
-    // Dengarkan aliran daily_history untuk memetakan tanggal minggu berjalan secara presisi
-    yield* db.ref('energy_data/$devId/$year/daily_history').onValue.map((event) {
+    // Dengarkan node tahunan energy_data/$devId/$year (meliputi daily_history dan weekly_energy)
+    yield* db.ref('energy_data/$devId/$year').onValue.map((event) {
       final nowCurrent = DateTime.now();
       final monday = DateTime(nowCurrent.year, nowCurrent.month, nowCurrent.day).subtract(Duration(days: nowCurrent.weekday - 1));
       final currentWeekDates = List.generate(7, (i) {
@@ -329,12 +329,38 @@ class EnergyDatabaseService {
 
       final result = List<double>.filled(7, 0.0);
       if (event.snapshot.exists && event.snapshot.value is Map) {
-        final historyMap = event.snapshot.value as Map;
-        for (int i = 0; i < 7; i++) {
-          final dateKey = currentWeekDates[i];
-          final entry = historyMap[dateKey];
-          if (entry is Map && entry['energy_kwh'] is num) {
-            result[i] = (entry['energy_kwh'] as num).toDouble();
+        final yearMap = event.snapshot.value as Map;
+        final historyMap = yearMap['daily_history'];
+        final weeklyMap = yearMap['weekly_energy'];
+
+        // 1. Ambil dari daily_history berdasarkan tanggal kalender
+        if (historyMap is Map) {
+          for (int i = 0; i < 7; i++) {
+            final dateKey = currentWeekDates[i];
+            final entry = historyMap[dateKey];
+            if (entry is Map && entry['energy_kwh'] is num) {
+              result[i] = (entry['energy_kwh'] as num).toDouble();
+            }
+          }
+        }
+
+        // 2. Fallback periksa weekly_energy (indeks 0..6) jika slot hari masih 0
+        final activeDayIndex = nowCurrent.weekday - 1; // 0=Sen .. 6=Min
+        if (weeklyMap is Map) {
+          weeklyMap.forEach((key, val) {
+            final idx = int.tryParse(key.toString());
+            if (idx != null && idx >= 0 && idx <= activeDayIndex && idx < 7 && val is num) {
+              if (result[idx] == 0.0) {
+                result[idx] = val.toDouble();
+              }
+            }
+          });
+        } else if (weeklyMap is List) {
+          for (int i = 0; i <= activeDayIndex && i < weeklyMap.length && i < 7; i++) {
+            final val = weeklyMap[i];
+            if (val is num && result[i] == 0.0) {
+              result[i] = val.toDouble();
+            }
           }
         }
       }

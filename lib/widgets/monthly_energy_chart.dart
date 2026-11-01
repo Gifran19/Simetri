@@ -31,48 +31,51 @@ class MonthlyEnergyChart extends StatelessWidget {
     // Nilai valid jika ada minimal satu bulan > 0.00001 (tidak menganggap 0.002 sebagai kosong)
     final bool isEmpty = data.isEmpty || data.every((e) => e <= 0.00001);
     final displayData = isEmpty ? List<double>.filled(12, 0.0) : data;
-    final maxVal = isEmpty ? 100.0 : displayData.reduce((a, b) => a > b ? a : b);
+    final maxVal = isEmpty ? 0.0 : displayData.reduce((a, b) => a > b ? a : b);
 
-    // Hitung maxY dan interval dinamis agar data berapapun kecilnya (mis. 0.002 kWh)
-    // tetap proporsional dan barnya tampak jelas terlihat
+    // Hitung maxY dan interval dinamis dengan headroom yang cukup (30-60% di atas nilai maksimal)
+    // agar bar proporsional, bernafas lega, dan TIDAK menyentuh batas atas/menutup label
     final double maxY;
     final double interval;
     if (isEmpty || maxVal <= 0.0) {
       maxY = 100.0;
       interval = 20.0;
     } else if (maxVal <= 0.005) {
-      maxY = 0.005;
-      interval = 0.001;
-    } else if (maxVal <= 0.01) {
-      maxY = 0.01;
+      maxY = 0.008;
       interval = 0.002;
+    } else if (maxVal <= 0.01) {
+      maxY = 0.016;
+      interval = 0.004;
+    } else if (maxVal <= 0.02) {
+      maxY = 0.030;
+      interval = 0.010;
     } else if (maxVal <= 0.05) {
-      maxY = 0.05;
-      interval = 0.01;
+      maxY = 0.080;
+      interval = 0.020;
     } else if (maxVal <= 0.1) {
-      maxY = 0.1;
-      interval = 0.02;
+      maxY = 0.150;
+      interval = 0.050;
     } else if (maxVal <= 0.5) {
-      maxY = 0.5;
-      interval = 0.1;
-    } else if (maxVal <= 1.0) {
-      maxY = 1.0;
+      maxY = 0.8;
       interval = 0.2;
+    } else if (maxVal <= 1.0) {
+      maxY = 1.5;
+      interval = 0.5;
     } else if (maxVal <= 5.0) {
-      maxY = 5.0;
-      interval = 1.0;
-    } else if (maxVal <= 10.0) {
-      maxY = 10.0;
+      maxY = 8.0;
       interval = 2.0;
+    } else if (maxVal <= 10.0) {
+      maxY = 15.0;
+      interval = 5.0;
     } else if (maxVal <= 50.0) {
-      maxY = 50.0;
-      interval = 10.0;
-    } else if (maxVal <= 150.0) {
-      maxY = 150.0;
-      interval = 30.0;
-    } else {
-      maxY = ((maxVal / 20).ceil() * 20 + 20).toDouble();
+      maxY = 80.0;
       interval = 20.0;
+    } else if (maxVal <= 150.0) {
+      maxY = 200.0;
+      interval = 50.0;
+    } else {
+      maxY = ((maxVal * 1.3 / 20).ceil() * 20).toDouble();
+      interval = (maxY / 5).ceilToDouble();
     }
 
     return Container(
@@ -121,12 +124,13 @@ class MonthlyEnergyChart extends StatelessWidget {
           const Text('kWh', style: TextStyle(color: Colors.white70, fontSize: 11)),
           const SizedBox(height: 12),
 
-          // Chart with ClipRect
+          // Chart with Top Padding to prevent label clipping
           SizedBox(
             height: 240,
             child: Stack(
               children: [
-                ClipRect(
+                Padding(
+                  padding: const EdgeInsets.only(top: 10, right: 8),
                   child: BarChart(
                     BarChartData(
                       maxY: maxY,
@@ -167,14 +171,14 @@ class MonthlyEnergyChart extends StatelessWidget {
                             interval: interval,
                             reservedSize: maxY < 1.0 ? 44 : 32,
                             getTitlesWidget: (value, meta) {
-                              if (value < 0 || value > maxY + (interval * 0.1)) {
+                              if (value < 0 || value > maxY + (interval * 0.05)) {
                                 return const SizedBox();
                               }
                               final String labelText;
                               if (maxY <= 0.01) {
                                 labelText = value.toStringAsFixed(3);
                               } else if (maxY <= 0.1) {
-                                labelText = value.toStringAsFixed(2);
+                                labelText = value.toStringAsFixed(3);
                               } else if (maxY <= 1.0) {
                                 labelText = value.toStringAsFixed(1);
                               } else {

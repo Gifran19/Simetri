@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:my_test_app/models/yearly_energy_data.dart';
 import 'package:my_test_app/services/device_service.dart';
 import 'package:my_test_app/services/sensor_stream_service.dart';
+import 'package:my_test_app/widgets/daily_energy_chart.dart';
 import 'package:my_test_app/widgets/energy_analysis_summary.dart';
 import 'package:my_test_app/widgets/monthly_cost_chart.dart';
 import 'package:my_test_app/widgets/monthly_energy_chart.dart';
@@ -160,6 +161,27 @@ void main() {
       // Subtitle satuan harus 'Rupiah (Rp)', bukan 'Rp (dalam ribuan)' karena biaya < 1000
       expect(find.text('Rupiah (Rp)'), findsOneWidget);
       expect(find.text('Perbandingan Biaya Bulanan'), findsOneWidget);
+    });
+
+    testWidgets('8. DailyEnergyChart TIDAK menampilkan "Belum ada rekaman histori" saat ada data 0.010 kWh di hari Jumat', (tester) async {
+      // 7 hari: Sen, Sel, Rab, Kam, Jum (0.010), Sab, Min
+      final weeklyData = [0.0, 0.0, 0.0, 0.0, 0.010, 0.0, 0.0];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DailyEnergyChart(
+              data: weeklyData,
+              isConnected: true,
+            ),
+          ),
+        ),
+      );
+
+      // Badge dan overlay 'Belum ada rekaman histori' TIDAK boleh muncul
+      expect(find.text('Belum ada rekaman histori'), findsNothing);
+      expect(find.text('Pemakaian Energi Harian'), findsOneWidget);
+      expect(find.text('Jum'), findsOneWidget);
     });
   });
 }

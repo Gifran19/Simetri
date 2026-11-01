@@ -101,6 +101,23 @@ class _HomeScreenState extends State<HomeScreen> {
     final dbService = EnergyDatabaseService();
     final now = DateTime.now();
 
+    // Ambil segera snapshot data awal agar tidak menunggu lama
+    dbService.fetchWeeklyEnergy().then((weekly) {
+      if (mounted && weekly.any((v) => v > 0)) {
+        setState(() {
+          _device = _device.copyWith(dailyHistory: weekly);
+        });
+      }
+    });
+
+    dbService.fetchYearlyData(now.year).then((yearly) {
+      if (mounted && (yearly.monthlyEnergy.any((v) => v > 0) || yearly.totalEnergy > 0)) {
+        setState(() {
+          _device = _device.copyWith(monthlyEnergyHistory: yearly.monthlyEnergy);
+        });
+      }
+    });
+
     _weeklySubscription = dbService.streamWeeklyEnergy().listen((weekly) {
       if (mounted) {
         setState(() {
@@ -246,12 +263,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final budget = await DeviceService.getMonthlyBudget();
 
     if (!mounted) return;
+    final prevDaily = _device.dailyHistory;
+    final prevMonthlyEnergy = _device.monthlyEnergyHistory;
+    final prevMonthlyCost = _device.monthlyCostHistory;
+
     setState(() {
       _isConnected = savedConnected;
       _device = DeviceService.getDeviceData(
         isConnected: savedConnected,
         powerLimitVa: powerLimit,
         monthlyBudgetRp: budget,
+      ).copyWith(
+        dailyHistory: prevDaily,
+        monthlyEnergyHistory: prevMonthlyEnergy,
+        monthlyCostHistory: prevMonthlyCost,
       );
     });
 
@@ -275,12 +300,20 @@ class _HomeScreenState extends State<HomeScreen> {
             final budget = await DeviceService.getMonthlyBudget();
 
             if (!mounted) return;
+            final prevDaily = _device.dailyHistory;
+            final prevMonthlyEnergy = _device.monthlyEnergyHistory;
+            final prevMonthlyCost = _device.monthlyCostHistory;
+
             setState(() {
               _isConnected = true;
               _device = DeviceService.getDeviceData(
                 isConnected: true,
                 powerLimitVa: powerLimit,
                 monthlyBudgetRp: budget,
+              ).copyWith(
+                dailyHistory: prevDaily,
+                monthlyEnergyHistory: prevMonthlyEnergy,
+                monthlyCostHistory: prevMonthlyCost,
               );
             });
 
@@ -929,7 +962,7 @@ class _HomeScreenState extends State<HomeScreen> {
         const SizedBox(height: 14),
 
         DailyEnergyChart(
-          data: _isConnected && _status.showsMeasurements ? _device.dailyHistory : const [],
+          data: _isConnected ? _device.dailyHistory : const [],
           isConnected: _isConnected,
         ),
         const SizedBox(height: 18),
@@ -1048,7 +1081,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 16),
 
                   DailyEnergyChart(
-                    data: _isConnected && _status.showsMeasurements ? _device.dailyHistory : const [],
+                    data: _isConnected ? _device.dailyHistory : const [],
                     isConnected: _isConnected,
                   ),
                   const SizedBox(height: 16),

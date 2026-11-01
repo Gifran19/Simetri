@@ -32,35 +32,38 @@ class MonthlyCostChart extends StatelessWidget {
     final bool useRibuan = maxCost >= 1000.0;
     final normalizedData = data.map((val) => useRibuan ? val / 1000.0 : val).toList();
 
-    // Hitung maxY dan interval dinamis
+    // Hitung maxY dan interval dinamis dengan headroom yang cukup (30-60%) agar bar tidak mentok atas
     final double maxY;
     final double interval;
     if (isEmpty || maxCost <= 0.0) {
       maxY = 100.0;
       interval = 20.0;
     } else if (!useRibuan) {
-      if (maxCost <= 5.0) {
-        maxY = 5.0;
-        interval = 1.0;
-      } else if (maxCost <= 10.0) {
-        maxY = 10.0;
+      if (maxCost <= 4.0) {
+        maxY = 6.0;
         interval = 2.0;
-      } else if (maxCost <= 50.0) {
+      } else if (maxCost <= 8.0) {
+        maxY = 12.0;
+        interval = 3.0;
+      } else if (maxCost <= 15.0) {
+        maxY = 24.0;
+        interval = 6.0;
+      } else if (maxCost <= 35.0) {
         maxY = 50.0;
         interval = 10.0;
-      } else if (maxCost <= 100.0) {
+      } else if (maxCost <= 75.0) {
         maxY = 100.0;
         interval = 20.0;
-      } else if (maxCost <= 500.0) {
+      } else if (maxCost <= 350.0) {
         maxY = 500.0;
         interval = 100.0;
       } else {
-        maxY = 1000.0;
-        interval = 200.0;
+        maxY = ((maxCost * 1.3 / 100).ceil() * 100).toDouble();
+        interval = (maxY / 5).ceilToDouble();
       }
     } else {
       final normMax = maxCost / 1000.0;
-      maxY = normMax > 150 ? ((normMax / 20).ceil() * 20 + 20).toDouble() : 180.0;
+      maxY = normMax > 150 ? ((normMax * 1.3 / 20).ceil() * 20).toDouble() : 180.0;
       interval = maxY > 200 ? 50.0 : 20.0;
     }
 
@@ -113,10 +116,11 @@ class MonthlyCostChart extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // Bar Chart with ClipRect to prevent bar bleeding
+          // Bar Chart with Top Padding to prevent label clipping
           SizedBox(
             height: 240,
-            child: ClipRect(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10, right: 8),
               child: BarChart(
                 BarChartData(
                   maxY: maxY,
