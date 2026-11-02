@@ -153,6 +153,15 @@ async function applyAddMember(db, deviceId, userUid) {
     deviceId: cleanDeviceId,
   });
 
+  const memberRef = db.ref(`devices/${cleanDeviceId}/members/${cleanUid}`);
+  await memberRef.set({
+    uid: cleanUid,
+    role: 'member',
+    status: 'active',
+    addedAt: now,
+    addedBy: 'local_admin',
+  });
+
   return { metaData, ownerUid: metaData.ownerUid || null };
 }
 
@@ -260,6 +269,16 @@ async function applyRevoke(db, deviceId, userUid) {
     revokedAt: now,
     revokedBy: 'local_admin',
   });
+
+  const memberRef = db.ref(`devices/${cleanDeviceId}/members/${cleanUid}`);
+  const memberSnap = await memberRef.get();
+  if (memberSnap.exists()) {
+    await memberRef.update({
+      status: 'revoked',
+      revokedAt: now,
+      revokedBy: 'local_admin',
+    });
+  }
 
   // Periksa apakah pengguna adalah owner pada meta
   let wasOwner = false;

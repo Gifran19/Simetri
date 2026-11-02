@@ -6,7 +6,16 @@
     "permissions": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
-        ".write": false
+        "$deviceId": {
+          ".read": "auth != null && (auth.uid === $uid || root.child('devices').child($deviceId).child('meta').child('ownerUid').val() === auth.uid)",
+          ".write": "auth != null && root.child('devices').child($deviceId).child('meta').child('ownerUid').val() === auth.uid && (newData.child('role').val() === 'member' || !newData.exists() || newData.child('status').val() === 'revoked')",
+          "role": {
+            ".validate": "newData.val() === 'member'"
+          },
+          "status": {
+            ".validate": "newData.val() === 'active' || newData.val() === 'revoked'"
+          }
+        }
       }
     },
 
@@ -25,6 +34,14 @@
         "meta": {
           ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",
           ".write": false
+        },
+        "members": {
+          ".read": "auth != null && (root.child('devices').child($deviceId).child('meta').child('ownerUid').val() === auth.uid || root.child('devices').child($deviceId).child('members').child(auth.uid).child('status').val() === 'active')",
+          ".write": "auth != null && root.child('devices').child($deviceId).child('meta').child('ownerUid').val() === auth.uid",
+          "$memberUid": {
+            ".read": "auth != null && (root.child('devices').child($deviceId).child('meta').child('ownerUid').val() === auth.uid || auth.uid === $memberUid)",
+            ".write": "auth != null && root.child('devices').child($deviceId).child('meta').child('ownerUid').val() === auth.uid"
+          }
         },
         "live": {
           ".read": "auth != null && (root.child('permissions').child(auth.uid).child($deviceId).child('status').val() === 'active' || auth.uid === 'esp32_' + $deviceId || auth.uid === root.child('devices').child($deviceId).child('meta').child('deviceUid').val())",

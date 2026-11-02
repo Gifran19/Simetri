@@ -43,6 +43,50 @@ class AccessApprovalResult {
   });
 
   bool get isGranted => status == AccessStatus.active;
+  bool get isOwner => status == AccessStatus.active && role.toLowerCase() == 'owner';
+}
+
+/// Model representasi anggota (member) yang memiliki izin pada perangkat
+class DeviceMember {
+  final String uid;
+  final String role;
+  final String status;
+  final String label;
+  final int? addedAt;
+  final String? addedBy;
+
+  const DeviceMember({
+    required this.uid,
+    this.role = 'member',
+    this.status = 'active',
+    this.label = '',
+    this.addedAt,
+    this.addedBy,
+  });
+
+  bool get isActive => status == 'active';
+
+  factory DeviceMember.fromMap(String uid, Map<dynamic, dynamic> map) {
+    return DeviceMember(
+      uid: uid,
+      role: (map['role'] ?? 'member').toString(),
+      status: (map['status'] ?? 'active').toString(),
+      label: (map['label'] ?? '').toString(),
+      addedAt: map['addedAt'] is int ? map['addedAt'] as int : null,
+      addedBy: map['addedBy']?.toString(),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'uid': uid,
+      'role': role,
+      'status': status,
+      'label': label,
+      'addedAt': addedAt ?? DateTime.now().millisecondsSinceEpoch,
+      if (addedBy != null) 'addedBy': addedBy,
+    };
+  }
 }
 
 /// Service untuk memverifikasi persetujuan izin akses perangkat secara lokal
@@ -186,5 +230,160 @@ class AccessApprovalService {
         );
       }
     });
+  }
+
+  /// Mendengarkan daftar anggota (members) yang didaftarkan untuk perangkat ini secara real-time.
+  /// Hanya dapat dibaca jika pengguna adalah pemilik (owner) perangkat.
+  Stream<List<DeviceMember>> streamDeviceMembers(String targetDeviceId) async* {
+    final cleanDeviceId = targetDeviceId.trim();
+    if (cleanDeviceId.isEmpty) {
+      yield [];
+      return;
+    }
+
+    final dbRef = FirebaseDatabase.instance.ref('devices/$cleanDeviceId/members');
+    yield* dbRef.onValue.map((event) {
+      if (!event.snapshot.exists || event.snapshot.value == null) {
+        return <DeviceMember>[];
+      }
+      final rawData = event.snapshot.value;
+      if (rawData is! Map) return <DeviceMember>[];
+
+      final members = <DeviceMember>[];
+      rawData.forEach((key, val) {
+        if (val is Map) {
+          members.add(DeviceMember.fromMap(key.toString(), val));
+        }
+      });
+      // Sort: active first, then descending by addedAt
+      members.sort((a, b) {
+        if (a.isActive != b.isActive) {
+          return a.isActive ? -1 : 1;
+        }
+        return (b.addedAt ?? 0).compareTo(a.addedAt ?? 0);
+      });
+      return members;
+    });
+  }
+
+  /// Memberikan atau memperbarui izin akses anggota baru oleh Owner perangkat.
+  /// Menulis ke:
+  /// 1. devices/$deviceId/members/$memberUid
+  /// 2. permissions/$memberUid/$deviceId
+  Future<void> addOrUpdateMember({
+    required String deviceId,
+    required String memberUid,
+    String label = '',
+  }) async {
+    final cleanDeviceId = deviceId.trim();
+    final cleanMemberUid = memberUid.trim();
+
+    if (cleanDeviceId.isEmpty) {
+      throw ArgumentError('ID Perangkat tidak boleh kosong.');
+    }
+    if (cleanMemberUid.isEmpty) {
+      throw ArgumentError('UID Anggota tidak boleh kosong.');
+    }
+
+    final currentUid = await getCurrentAnonymousUid();
+    if (currentUid == null || currentUid.isEmpty) {
+      throw StateError('Sesi autentikasi tidak tersedia.');
+    }
+
+    if (currentUid == cleanMemberUid) {
+      throw ArgumentError('Anda adalah pemilik perangkat, tidak perlu menambahkan diri sendiri sebagai anggota.');
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final memberData = {
+      'uid': cleanMemberUid,
+      'role': 'member',
+      'status': 'active',
+      'label': label.trim(),
+      'addedAt': now,
+      'addedBy': currentUid,
+    };
+
+    final permissionData = {
+      'status': 'active',
+      'role': 'member',
+      'grantedAt': now,
+      'grantedBy': currentUid,
+      'deviceId': cleanDeviceId,
+    };
+
+    final db = FirebaseDatabase.instance;
+    await Future.wait([
+      db.ref('devices/$cleanDeviceId/members/$cleanMemberUid').set(memberData),
+      db.ref('permissions/$cleanMemberUid/$cleanDeviceId').set(permissionData),
+    ]);
+  }
+
+  /// Mencabut izin anggota oleh Owner tanpa menghapus riwayatnya.
+  Future<void> revokeMember({
+    required String deviceId,
+    required String memberUid,
+  }) async {
+    final cleanDeviceId = deviceId.trim();
+    final cleanMemberUid = memberUid.trim();
+
+    final currentUid = await getCurrentAnonymousUid();
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final db = FirebaseDatabase.instance;
+    await Future.wait([
+      db.ref('devices/$cleanDeviceId/members/$cleanMemberUid').update({
+        'status': 'revoked',
+        'revokedAt': now,
+        if (currentUid != null) 'revokedBy': currentUid,
+      }),
+      db.ref('permissions/$cleanMemberUid/$cleanDeviceId').update({
+        'status': 'revoked',
+        'revokedAt': now,
+        if (currentUid != null) 'revokedBy': currentUid,
+      }),
+    ]);
+  }
+
+  /// Mengaktifkan kembali izin anggota yang sebelumnya dicabut.
+  Future<void> reactivateMember({
+    required String deviceId,
+    required String memberUid,
+  }) async {
+    final cleanDeviceId = deviceId.trim();
+    final cleanMemberUid = memberUid.trim();
+
+    final currentUid = await getCurrentAnonymousUid();
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    final db = FirebaseDatabase.instance;
+    await Future.wait([
+      db.ref('devices/$cleanDeviceId/members/$cleanMemberUid').update({
+        'status': 'active',
+        'reactivatedAt': now,
+        if (currentUid != null) 'reactivatedBy': currentUid,
+      }),
+      db.ref('permissions/$cleanMemberUid/$cleanDeviceId').update({
+        'status': 'active',
+        'reactivatedAt': now,
+        if (currentUid != null) 'reactivatedBy': currentUid,
+      }),
+    ]);
+  }
+
+  /// Menghapus izin anggota secara permanen dari perangkat.
+  Future<void> removeMember({
+    required String deviceId,
+    required String memberUid,
+  }) async {
+    final cleanDeviceId = deviceId.trim();
+    final cleanMemberUid = memberUid.trim();
+
+    final db = FirebaseDatabase.instance;
+    await Future.wait([
+      db.ref('devices/$cleanDeviceId/members/$cleanMemberUid').remove(),
+      db.ref('permissions/$cleanMemberUid/$cleanDeviceId').remove(),
+    ]);
   }
 }
