@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:my_test_app/models/sensor_reading.dart';
+import 'package:my_test_app/models/scheduled_tariff.dart';
 import 'package:my_test_app/services/live_status.dart';
 import 'package:my_test_app/services/device_service.dart';
 
@@ -164,6 +165,39 @@ void main() {
       expect(listResult[1], equals(0.12));
       expect(listResult[3], equals(0.25));
       expect(listResult.length, equals(7));
+    });
+
+    test('ScheduledTariff model correctly evaluates isDue, serialization and deserialization', () {
+      final futureTime = DateTime.now().add(const Duration(days: 1)).millisecondsSinceEpoch;
+      final pastTime = DateTime.now().subtract(const Duration(hours: 1)).millisecondsSinceEpoch;
+
+      final futureSchedule = ScheduledTariff(
+        rate: 1600.0,
+        effectiveTimestamp: futureTime,
+        effectiveDateStr: 'Besok',
+        note: 'Penyesuaian Besok',
+      );
+      expect(futureSchedule.isDue, isFalse);
+
+      final dueSchedule = ScheduledTariff(
+        rate: 1700.0,
+        effectiveTimestamp: pastTime,
+        effectiveDateStr: 'Hari Ini',
+        note: 'Aktif Sekarang',
+      );
+      expect(dueSchedule.isDue, isTrue);
+
+      final map = futureSchedule.toMap();
+      expect(map['rate'], equals(1600.0));
+      expect(map['effective_timestamp'], equals(futureTime));
+      expect(map['effective_date_str'], equals('Besok'));
+      expect(map['note'], equals('Penyesuaian Besok'));
+
+      final parsed = ScheduledTariff.fromMap(map);
+      expect(parsed.rate, equals(1600.0));
+      expect(parsed.effectiveTimestamp, equals(futureTime));
+      expect(parsed.effectiveDateStr, equals('Besok'));
+      expect(parsed.isDue, isFalse);
     });
   });
 }

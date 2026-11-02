@@ -2,9 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/security_service.dart';
 
+typedef TariffSaveCallback = void Function(
+  double tariff,
+  DateTime effectiveDate,
+  String dateLabel,
+  String note,
+);
+
 class UpdateTariffSheet extends StatefulWidget {
   final double currentTariff;
-  final Function(double tariff, String date, String note) onSave;
+  final TariffSaveCallback onSave;
 
   const UpdateTariffSheet({super.key, required this.currentTariff, required this.onSave});
 
@@ -16,21 +23,44 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
   final TextEditingController _tariffController = TextEditingController();
   final TextEditingController _noteController = TextEditingController();
 
-  String _selectedDate = 'Hari ini';
+  DateTime _effectiveDate = DateTime.now();
+  String _selectedOption = 'today';
+  String _selectedDateLabel = 'Hari ini';
 
   @override
   void initState() {
     super.initState();
-    // Default isi dengan tarif aktif
     _tariffController.text = widget.currentTariff.toInt().toString();
+    final now = DateTime.now();
+    _effectiveDate = DateTime(now.year, now.month, now.day);
+  }
+
+  void _selectPresetDate(String option) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    setState(() {
+      _selectedOption = option;
+      if (option == 'today') {
+        _effectiveDate = today;
+        _selectedDateLabel = 'Hari ini';
+      } else if (option == 'tomorrow') {
+        _effectiveDate = today.add(const Duration(days: 1));
+        _selectedDateLabel = 'Besok (${DateFormat('dd MMMM yyyy').format(_effectiveDate)})';
+      } else if (option == 'month') {
+        _effectiveDate = DateTime(today.year, today.month + 1, 1);
+        _selectedDateLabel = 'Awal Bulan Depan (${DateFormat('dd MMMM yyyy').format(_effectiveDate)})';
+      }
+    });
   }
 
   Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime.now(),
-      lastDate: DateTime(2030),
+      initialDate: _effectiveDate.isBefore(today) ? today : _effectiveDate,
+      firstDate: today,
+      lastDate: DateTime(2035),
       builder: (context, child) {
         return Theme(data: ThemeData.dark(), child: child!);
       },
@@ -38,7 +68,15 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
 
     if (picked != null) {
       setState(() {
-        _selectedDate = DateFormat('dd MMMM yyyy').format(picked);
+        _selectedOption = 'custom';
+        _effectiveDate = DateTime(picked.year, picked.month, picked.day);
+        if (_effectiveDate == today) {
+          _selectedDateLabel = 'Hari ini';
+        } else if (_effectiveDate == today.add(const Duration(days: 1))) {
+          _selectedDateLabel = 'Besok (${DateFormat('dd MMMM yyyy').format(_effectiveDate)})';
+        } else {
+          _selectedDateLabel = DateFormat('dd MMMM yyyy').format(_effectiveDate);
+        }
       });
     }
   }
@@ -53,6 +91,9 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final isFuture = _effectiveDate.isAfter(today);
 
     return Center(
       child: ConstrainedBox(
@@ -101,52 +142,46 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                       ],
                     ),
                     IconButton(
-                      onPressed: () => Navigator.pop(context),
                       icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                      onPressed: () => Navigator.pop(context),
                     ),
                   ],
                 ),
-                const Text(
-                  'Masukkan nominal tarif listrik per kWh secara manual.',
-                  style: TextStyle(color: Colors.white54, fontSize: 11),
-                ),
                 const SizedBox(height: 16),
 
-                // TARIF SAAT INI
-                const Text('Tarif saat ini', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                const SizedBox(height: 8),
+                // INFO TARIF SAAT INI
                 Container(
-                  width: double.infinity,
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: const Color(0xff10233F),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white12),
                   ),
-                  child: Text(
-                    'Rp ${widget.currentTariff.toInt()} /kWh',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                    ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline_rounded, color: Color(0xff00D9A6), size: 18),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Tarif aktif saat ini: Rp ${widget.currentTariff.toInt()} /kWh',
+                        style: const TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 16),
 
-                // TARIF BARU
+                // INPUT TARIF BARU
                 const Text(
-                  'Tarif baru (Rp/kWh)',
+                  'Tarif Baru per kWh (Rp)',
                   style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _tariffController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  style: const TextStyle(color: Colors.white),
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
                   onChanged: (val) => setState(() {}),
                   decoration: InputDecoration(
-                    hintText: 'Contoh: 1444.70',
+                    hintText: 'Masukkan tarif baru',
                     hintStyle: const TextStyle(color: Colors.white30),
                     prefixText: 'Rp  ',
                     prefixStyle: const TextStyle(
@@ -172,18 +207,18 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    _dateButton('Hari ini'),
+                    _dateButton('Hari ini', 'today'),
                     const SizedBox(width: 8),
-                    _dateButton('Besok'),
+                    _dateButton('Besok', 'tomorrow'),
                     const SizedBox(width: 8),
-                    _dateButton('1 Bulan Depan'),
+                    _dateButton('1 Bulan Depan', 'month'),
                   ],
                 ),
                 const SizedBox(height: 8),
                 OutlinedButton.icon(
                   onPressed: _pickDate,
                   icon: const Icon(Icons.calendar_today_rounded, size: 16),
-                  label: Text('Pilih Tanggal Manual ($_selectedDate)'),
+                  label: Text('Pilih Tanggal Manual ($_selectedDateLabel)'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xff00D9A6),
                     side: BorderSide(color: const Color(0xff00D9A6).withValues(alpha: 0.5)),
@@ -218,52 +253,87 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                 ),
                 const SizedBox(height: 16),
 
-                // PREVIEW PERUBAHAN
+                // PREVIEW PERUBAHAN & JADWAL
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: const Color(0xff10233F),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xff00D9A6).withValues(alpha: 0.2)),
+                    border: Border.all(
+                      color: isFuture
+                          ? Colors.amber.withValues(alpha: 0.5)
+                          : const Color(0xff00D9A6).withValues(alpha: 0.3),
+                    ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Ringkasan Perubahan:',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Ringkasan Perubahan:',
+                            style: TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                          Text(
+                            'Rp ${widget.currentTariff.toInt()}  →  Rp ${_tariffController.text.isEmpty ? "0" : _tariffController.text} /kWh',
+                            style: const TextStyle(
+                              color: Color(0xff00D9A6),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        'Rp ${widget.currentTariff.toInt()}  →  Rp ${_tariffController.text.isEmpty ? "0" : _tariffController.text} /kWh',
-                        style: const TextStyle(
-                          color: Color(0xff00D9A6),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(
+                            isFuture ? Icons.event_available_rounded : Icons.flash_on_rounded,
+                            size: 15,
+                            color: isFuture ? Colors.amber : const Color(0xff00D9A6),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              isFuture
+                                  ? 'Terjadwal: Mulai $_selectedDateLabel\n(Hari ini tetap berjalan dengan Rp ${widget.currentTariff.toInt()} /kWh)'
+                                  : 'Langsung berlaku untuk hari ini',
+                              style: TextStyle(
+                                color: isFuture ? Colors.amber : const Color(0xff00D9A6),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
 
-                // Penjelasan dampak perubahan tarif terhadap perhitungan biaya
+                // PENJELASAN
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.amber.withValues(alpha: 0.1),
+                    color: Colors.white.withValues(alpha: 0.03),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.amber.withValues(alpha: 0.25)),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
                   ),
-                  child: const Row(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.info_outline, color: Colors.amber, size: 16),
-                      SizedBox(width: 8),
+                      const Icon(Icons.info_outline, color: Colors.amber, size: 16),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Catatan: Tarif baru akan diterapkan perangkat untuk menghitung ulang seluruh estimasi biaya periode berjalan (biaya = kWh × tarif). Akumulasi energi fisik (kWh) tidak di-reset.',
-                          style: TextStyle(color: Colors.white70, fontSize: 11, height: 1.35),
+                          isFuture
+                              ? 'Catatan: Tarif saat ini tidak akan berubah sampai tanggal jadwal tiba. Begitu tanggal tiba, sistem otomatis mengaktifkan tarif baru.'
+                              : 'Catatan: Tarif baru akan diterapkan perangkat untuk menghitung ulang seluruh estimasi biaya periode berjalan (biaya = kWh × tarif). Akumulasi energi fisik (kWh) tidak di-reset.',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.35),
                         ),
                       ),
                     ],
@@ -281,25 +351,26 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                       if (value != null) {
                         final authorized = await SecurityService.requestAuthorization(
                           context: context,
-                          actionTitle: 'Ubah Tarif Listrik',
-                          actionDescription:
-                              'Verifikasi identitas untuk mengubah tarif listrik ke Rp ${value.toInt()} /kWh.',
+                          actionTitle: isFuture ? 'Jadwalkan Tarif Listrik' : 'Ubah Tarif Listrik',
+                          actionDescription: isFuture
+                              ? 'Verifikasi identitas untuk menjadwalkan tarif Rp ${value.toInt()} /kWh mulai $_selectedDateLabel.'
+                              : 'Verifikasi identitas untuk mengubah tarif listrik ke Rp ${value.toInt()} /kWh mulai hari ini.',
                         );
                         if (!authorized) return;
 
-                        widget.onSave(value, _selectedDate, _noteController.text);
+                        widget.onSave(value, _effectiveDate, _selectedDateLabel, _noteController.text);
                         if (!context.mounted) return;
                         Navigator.pop(context);
                       }
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xff00D9A6),
+                      backgroundColor: isFuture ? Colors.amber : const Color(0xff00D9A6),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
-                    child: const Text(
-                      'Simpan Perubahan Tarif',
-                      style: TextStyle(
+                    child: Text(
+                      isFuture ? 'Jadwalkan Perubahan Tarif' : 'Simpan Perubahan Tarif',
+                      style: const TextStyle(
                         color: Colors.black,
                         fontWeight: FontWeight.bold,
                         fontSize: 15,
@@ -315,11 +386,11 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
     );
   }
 
-  Widget _dateButton(String text) {
-    final isSelected = _selectedDate == text;
+  Widget _dateButton(String text, String option) {
+    final isSelected = _selectedOption == option;
     return Expanded(
       child: OutlinedButton(
-        onPressed: () => setState(() => _selectedDate = text),
+        onPressed: () => _selectPresetDate(option),
         style: OutlinedButton.styleFrom(
           foregroundColor: isSelected ? const Color(0xff00D9A6) : Colors.white70,
           side: BorderSide(color: isSelected ? const Color(0xff00D9A6) : Colors.white24),

@@ -1,16 +1,26 @@
 import 'package:flutter/material.dart';
 
 import 'update_tariff_sheet.dart';
+import '../models/scheduled_tariff.dart';
 import '../screens/tariff_history_screen.dart';
 import '../services/device_service.dart';
 import '../services/live_status.dart';
 
+typedef OnTariffChangedCallback = void Function(
+  double newTariff,
+  DateTime effectiveDate,
+  String dateLabel,
+  String note,
+);
+
 class TariffCard extends StatelessWidget {
   final double tariff;
   final String activeDate;
-  final Function(double, String, String) onTariffChanged;
+  final OnTariffChangedCallback onTariffChanged;
   final TariffSyncStatus syncStatus;
   final double? appliedTariff;
+  final ScheduledTariff? scheduledTariff;
+  final VoidCallback? onCancelScheduled;
 
   const TariffCard({
     super.key,
@@ -19,6 +29,8 @@ class TariffCard extends StatelessWidget {
     required this.onTariffChanged,
     this.syncStatus = TariffSyncStatus.noData,
     this.appliedTariff,
+    this.scheduledTariff,
+    this.onCancelScheduled,
   });
 
   @override
@@ -113,10 +125,10 @@ class TariffCard extends StatelessWidget {
                   syncStatus.label,
                   style: TextStyle(
                     color: syncStatus == TariffSyncStatus.synced
-                        ? const Color(0xff00D9A6)
-                        : syncStatus == TariffSyncStatus.deviceOffline
-                            ? Colors.orangeAccent
-                            : Colors.lightBlueAccent,
+                      ? const Color(0xff00D9A6)
+                      : syncStatus == TariffSyncStatus.deviceOffline
+                          ? Colors.orangeAccent
+                          : Colors.lightBlueAccent,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -124,6 +136,55 @@ class TariffCard extends StatelessWidget {
               ],
             ),
           ),
+
+          // BANNER TARIF TERJADWAL (JIKA ADA)
+          if (scheduledTariff != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.event_available_rounded, color: Colors.amber, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Tarif Baru Terjadwal:',
+                          style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Rp ${scheduledTariff!.rate.toInt()} /kWh • ${scheduledTariff!.effectiveDateStr}',
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (onCancelScheduled != null)
+                    InkWell(
+                      onTap: onCancelScheduled,
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.redAccent.withValues(alpha: 0.5)),
+                        ),
+                        child: const Text('Batal', style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+
           const SizedBox(height: 16),
 
           Row(
@@ -138,8 +199,8 @@ class TariffCard extends StatelessWidget {
                       builder: (context) {
                         return UpdateTariffSheet(
                           currentTariff: tariff,
-                          onSave: (newTariff, date, note) {
-                            onTariffChanged(newTariff, date, note);
+                          onSave: (newTariff, effectiveDate, dateLabel, note) {
+                            onTariffChanged(newTariff, effectiveDate, dateLabel, note);
                           },
                         );
                       },
@@ -177,6 +238,7 @@ class TariffCard extends StatelessWidget {
                     );
                     onTariffChanged(
                       DeviceService.currentTariff,
+                      DateTime.now(),
                       DeviceService.tariffActiveDate,
                       DeviceService.tariffNote,
                     );
@@ -190,11 +252,11 @@ class TariffCard extends StatelessWidget {
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.bar_chart_rounded, size: 16),
+                      Icon(Icons.history_rounded, size: 16),
                       SizedBox(width: 6),
                       Flexible(
                         child: Text(
-                          'Lihat Riwayat',
+                          'Riwayat',
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                         ),

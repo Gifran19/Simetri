@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../firebase_options.dart';
 import '../models/device_data.dart';
+import '../models/scheduled_tariff.dart';
 import '../models/sensor_reading.dart';
 import '../models/yearly_energy_data.dart';
 import '../services/device_service.dart';
@@ -498,18 +499,37 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _handleTariffChanged(double value, String date, String note) async {
-    final result = await DeviceService.updateTariffAsync(value, date, note);
+  Future<void> _handleTariffChanged(
+    double value,
+    DateTime effectiveDate,
+    String date,
+    String note,
+  ) async {
+    final result = await DeviceService.updateTariffAsync(
+      value,
+      date,
+      note,
+      effectiveDate: effectiveDate,
+    );
     if (!mounted) return;
     setState(() {});
 
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final effectiveStart = DateTime(effectiveDate.year, effectiveDate.month, effectiveDate.day);
+    final isScheduled = effectiveStart.isAfter(todayStart);
+
     switch (result) {
       case TariffWriteResult.written:
-        final reachable = SensorStreamService.instance.status.deviceReachable;
-        if (reachable) {
-          _showNotification('Tarif tersimpan di cloud. Menunggu konfirmasi dari perangkat...');
+        if (isScheduled) {
+          _showNotification('Tarif Rp ${value.toInt()}/kWh berhasil dijadwalkan mulai $date.');
         } else {
-          _showNotification('Tarif tersimpan di cloud. Perangkat sedang offline, akan diterapkan saat online.');
+          final reachable = SensorStreamService.instance.status.deviceReachable;
+          if (reachable) {
+            _showNotification('Tarif tersimpan di cloud. Menunggu konfirmasi dari perangkat...');
+          } else {
+            _showNotification('Tarif tersimpan di cloud. Perangkat sedang offline, akan diterapkan saat online.');
+          }
         }
         break;
       case TariffWriteResult.demoNotSent:
@@ -530,6 +550,14 @@ class _HomeScreenState extends State<HomeScreen> {
       case TariffWriteResult.failed:
         _showNotification('Gagal menyimpan tarif ke cloud.', isWarning: true);
         break;
+    }
+  }
+
+  Future<void> _handleCancelScheduledTariff() async {
+    final success = await SensorStreamService.instance.cancelScheduledTariff();
+    if (!mounted) return;
+    if (success) {
+      _showNotification('Jadwal perubahan tarif berhasil dibatalkan.');
     }
   }
 
@@ -915,18 +943,25 @@ class _HomeScreenState extends State<HomeScreen> {
         _buildStreamStatusBadge(),
         const SizedBox(height: 4),
 
-        ValueListenableBuilder<TariffSyncStatus>(
-          valueListenable: SensorStreamService.instance.tariffSyncNotifier,
-          builder: (context, syncStatus, _) {
-            return ValueListenableBuilder<double>(
-              valueListenable: DeviceService.tariffNotifier,
-              builder: (context, currentTariff, _) {
-                return TariffCard(
-                  tariff: currentTariff,
-                  activeDate: DeviceService.tariffActiveDate,
-                  syncStatus: syncStatus,
-                  appliedTariff: _latestReading?.appliedTariffPerKwh,
-                  onTariffChanged: _handleTariffChanged,
+        ValueListenableBuilder<ScheduledTariff?>(
+          valueListenable: SensorStreamService.instance.scheduledTariffNotifier,
+          builder: (context, scheduledTariff, _) {
+            return ValueListenableBuilder<TariffSyncStatus>(
+              valueListenable: SensorStreamService.instance.tariffSyncNotifier,
+              builder: (context, syncStatus, _) {
+                return ValueListenableBuilder<double>(
+                  valueListenable: DeviceService.tariffNotifier,
+                  builder: (context, currentTariff, _) {
+                    return TariffCard(
+                      tariff: currentTariff,
+                      activeDate: DeviceService.tariffActiveDate,
+                      syncStatus: syncStatus,
+                      appliedTariff: _latestReading?.appliedTariffPerKwh,
+                      scheduledTariff: scheduledTariff,
+                      onTariffChanged: _handleTariffChanged,
+                      onCancelScheduled: _handleCancelScheduledTariff,
+                    );
+                  },
                 );
               },
             );
@@ -1034,18 +1069,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   _buildStreamStatusBadge(),
                   const SizedBox(height: 6),
 
-                  ValueListenableBuilder<TariffSyncStatus>(
-                    valueListenable: SensorStreamService.instance.tariffSyncNotifier,
-                    builder: (context, syncStatus, _) {
-                      return ValueListenableBuilder<double>(
-                        valueListenable: DeviceService.tariffNotifier,
-                        builder: (context, currentTariff, _) {
-                          return TariffCard(
-                            tariff: currentTariff,
-                            activeDate: DeviceService.tariffActiveDate,
-                            syncStatus: syncStatus,
-                            appliedTariff: _latestReading?.appliedTariffPerKwh,
-                            onTariffChanged: _handleTariffChanged,
+                  ValueListenableBuilder<ScheduledTariff?>(
+                    valueListenable: SensorStreamService.instance.scheduledTariffNotifier,
+                    builder: (context, scheduledTariff, _) {
+                      return ValueListenableBuilder<TariffSyncStatus>(
+                        valueListenable: SensorStreamService.instance.tariffSyncNotifier,
+                        builder: (context, syncStatus, _) {
+                          return ValueListenableBuilder<double>(
+                            valueListenable: DeviceService.tariffNotifier,
+                            builder: (context, currentTariff, _) {
+                              return TariffCard(
+                                tariff: currentTariff,
+                                activeDate: DeviceService.tariffActiveDate,
+                                syncStatus: syncStatus,
+                                appliedTariff: _latestReading?.appliedTariffPerKwh,
+                                scheduledTariff: scheduledTariff,
+                                onTariffChanged: _handleTariffChanged,
+                                onCancelScheduled: _handleCancelScheduledTariff,
+                              );
+                            },
                           );
                         },
                       );

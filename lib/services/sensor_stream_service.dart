@@ -8,6 +8,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 
 import '../firebase_options.dart';
+import '../models/scheduled_tariff.dart';
 import '../models/sensor_reading.dart';
 import 'device_service.dart';
 import 'live_status.dart';
@@ -84,6 +85,11 @@ class SensorStreamService {
   final ValueNotifier<TariffSyncStatus> tariffSyncNotifier =
       ValueNotifier<TariffSyncStatus>(TariffSyncStatus.noData);
   TariffSyncStatus get tariffSyncStatus => tariffSyncNotifier.value;
+
+  /// Notifier untuk tarif terjadwal yang akan aktif di masa mendatang
+  final ValueNotifier<ScheduledTariff?> scheduledTariffNotifier =
+      ValueNotifier<ScheduledTariff?>(null);
+  ScheduledTariff? get scheduledTariff => scheduledTariffNotifier.value;
 
   // Akumulator energi simulasi DEMO (kWh) - hanya dipakai di mode DEMO
   double _simDailyEnergy = 0.0;
@@ -240,6 +246,20 @@ class SensorStreamService {
           if (!_isStreamingActive) return;
           final raw = event.snapshot.value;
           if (event.snapshot.exists && raw is Map) {
+            // Evaluasi tarif terjadwal (jika ada)
+            final schedRaw = raw['scheduled_tariff'];
+            if (schedRaw is Map) {
+              final sched = ScheduledTariff.fromMap(schedRaw);
+              if (sched.isDue) {
+                // Tanggal jadwal sudah tiba -> promosikan ke tarif aktif secara otomatis!
+                _promoteScheduledTariff(sched);
+              } else {
+                scheduledTariffNotifier.value = sched;
+              }
+            } else {
+              scheduledTariffNotifier.value = null;
+            }
+
             final t = raw['tariff_per_kwh'];
             if (t is num && t > 0) {
               final tariffVal = t.toDouble();
@@ -381,6 +401,105 @@ class SensorStreamService {
     } catch (e) {
       debugPrint('Tariff command error: $e');
       return TariffWriteResult.failed;
+    }
+  }
+
+  /// Mempromosikan tarif terjadwal menjadi tarif aktif ketika waktu berlakunya telah tiba
+  Future<void> _promoteScheduledTariff(ScheduledTariff sched) async {
+    final db = _db;
+    if (db == null) return;
+    try {
+      final controlRef = db.ref(rtdbControlPath);
+      await controlRef.update({
+        'tariff_per_kwh': sched.rate,
+        'scheduled_tariff': null,
+        'updated_at': ServerValue.timestamp,
+      });
+      scheduledTariffNotifier.value = null;
+      DeviceService.updateTariff(sched.rate, sched.effectiveDateStr, sched.note);
+      debugPrint('[TARIFF] Jadwal tarif Rp ${sched.rate}/kWh otomatis aktif!');
+    } catch (e) {
+      debugPrint('Error promoting scheduled tariff: $e');
+    }
+  }
+
+  /// Menjadwalkan atau langsung menerapkan tarif baru.
+  /// Jika [effectiveDate] adalah hari ini atau masa lalu -> langsung aktifkan sekarang.
+  /// Jika [effectiveDate] adalah besok atau mendatang -> simpan di control/scheduled_tariff
+  /// tanpa mengubah tarif aktif hari ini!
+  Future<TariffWriteResult> scheduleOrApplyTariff({
+    required double newTariff,
+    required DateTime effectiveDate,
+    required String dateLabel,
+    String note = '',
+  }) async {
+    if (newTariff <= 0.0 || newTariff > 100000.0) {
+      return TariffWriteResult.invalidValue;
+    }
+    if (kDemoMode) return TariffWriteResult.demoNotSent;
+
+    final db = _db;
+    if (db == null) return TariffWriteResult.firebaseUnavailable;
+
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final effectiveStart = DateTime(effectiveDate.year, effectiveDate.month, effectiveDate.day);
+    final isFuture = effectiveStart.isAfter(todayStart);
+
+    final controlRef = db.ref(rtdbControlPath);
+
+    try {
+      if (isFuture) {
+        // Terjadwal untuk masa depan: tarif hari ini TIDAK diubah!
+        final sched = ScheduledTariff(
+          rate: newTariff,
+          effectiveTimestamp: effectiveStart.millisecondsSinceEpoch,
+          effectiveDateStr: dateLabel,
+          note: note,
+        );
+        await controlRef.update({
+          'scheduled_tariff': sched.toMap(),
+          'updated_at': ServerValue.timestamp,
+        }).timeout(const Duration(seconds: 8));
+        scheduledTariffNotifier.value = sched;
+        return TariffWriteResult.written;
+      } else {
+        // Berlaku hari ini: langsung aktifkan
+        _targetControlTariff = newTariff;
+        _recomputeTariffSync();
+        await controlRef.update({
+          'tariff_per_kwh': newTariff,
+          'scheduled_tariff': null,
+          'updated_at': ServerValue.timestamp,
+        }).timeout(const Duration(seconds: 8));
+        scheduledTariffNotifier.value = null;
+        DeviceService.updateTariff(newTariff, dateLabel, note);
+        return TariffWriteResult.written;
+      }
+    } on TimeoutException {
+      return TariffWriteResult.timedOut;
+    } on FirebaseException catch (e) {
+      debugPrint('Tariff command Firebase error: ${e.code}');
+      if (e.code == 'permission-denied') return TariffWriteResult.permissionDenied;
+      return TariffWriteResult.failed;
+    } catch (e) {
+      debugPrint('Tariff command error: $e');
+      return TariffWriteResult.failed;
+    }
+  }
+
+  /// Membatalkan jadwal perubahan tarif yang belum aktif
+  Future<bool> cancelScheduledTariff() async {
+    final db = _db;
+    if (db == null) return false;
+    try {
+      final controlRef = db.ref(rtdbControlPath);
+      await controlRef.child('scheduled_tariff').remove().timeout(const Duration(seconds: 8));
+      scheduledTariffNotifier.value = null;
+      return true;
+    } catch (e) {
+      debugPrint('Error canceling scheduled tariff: $e');
+      return false;
     }
   }
 }

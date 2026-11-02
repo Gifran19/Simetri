@@ -1430,6 +1430,24 @@ bool bacaKontrolCloud() {
                         newTariff);
         }
       }
+
+      // 2b. Evaluasi jadwal tarif otomatis jika tanggal aktivasi telah tiba
+      if (ctrlDoc.containsKey("scheduled_tariff")) {
+        JsonObject sched = ctrlDoc["scheduled_tariff"].as<JsonObject>();
+        if (!sched.isNull() && sched.containsKey("rate") && sched.containsKey("effective_timestamp")) {
+          int64_t effTs = sched["effective_timestamp"].as<int64_t>();
+          time_t nowSec = time(nullptr);
+          if (nowSec > 1700000000 && ((int64_t)nowSec * 1000) >= effTs) {
+            float schedRate = sched["rate"].as<float>();
+            if (!isnan(schedRate) && schedRate >= 100.0f && schedRate <= 50000.0f) {
+              if (fabs(tarifPerKwh - schedRate) > 0.01f) {
+                tarifPerKwh = schedRate;
+                Serial.printf("[CTRL] Jadwal tarif tercapai: Rp %.2f /kWh otomatis aktif!\n", tarifPerKwh);
+              }
+            }
+          }
+        }
+      }
       return true;
     } else if (resp == "true") {
       requestedPower = true;

@@ -168,14 +168,19 @@ class DeviceService {
     }
   }
 
-  /// Memperbarui tarif secara lokal dan mengirimkannya ke Firebase Cloud control/tariff_per_kwh
+  /// Memperbarui tarif atau menjadwalkannya di Firebase Cloud
   static Future<TariffWriteResult> updateTariffAsync(
     double newTariff,
     String date,
-    String note,
-  ) async {
-    updateTariff(newTariff, date, note);
-    return await SensorStreamService.instance.writeTariffCommand(newTariff);
+    String note, {
+    DateTime? effectiveDate,
+  }) async {
+    return await SensorStreamService.instance.scheduleOrApplyTariff(
+      newTariff: newTariff,
+      effectiveDate: effectiveDate ?? DateTime.now(),
+      dateLabel: date,
+      note: note,
+    );
   }
 
   // =========================
