@@ -232,18 +232,22 @@ bool tombolBulanSebelum = HIGH;
 
 const unsigned long INTERVAL_HALAMAN = 3000UL;
 const unsigned long WAKTU_TAMPIL_TOMBOL = 10000UL;
-const unsigned long INTERVAL_BACA_PZEM = 1000UL;
-const unsigned long INTERVAL_KIRIM_CLOUD = 5000UL;
+const unsigned long INTERVAL_BACA_PZEM = 1000UL;       // Baca sensor PZEM setiap 1 detik
+const unsigned long INTERVAL_KIRIM_CLOUD = 2000UL;     // Kirim telemetri berkala setiap 2 detik (sebelumnya 5 detik)
 const unsigned long INTERVAL_KIRIM_HISTORI =
     30000UL; // Kirim histori berkala setiap 30 detik
-const unsigned long INTERVAL_BACA_CTRL = 3000UL;
+const unsigned long INTERVAL_BACA_CTRL = 1000UL;       // Cek perintah kontrol (relay/tarif) setiap 1 detik (sebelumnya 3 detik)
 const unsigned long INTERVAL_RETRY_WIFI =
     10000UL; // Reconnect bertahap setiap 10 detik
 const unsigned long INTERVAL_RETRY_LOGIN =
     15000UL; // Retry login setiap 15 detik jika gagal
 const unsigned long INTERVAL_REFRESH_TOKEN = 50UL * 60UL * 1000UL; // 50 menit
 const unsigned long NETWORK_TIMEOUT_MS =
-    3000UL; // Batasi operasi jaringan maks 3 detik
+    2000UL; // Batasi operasi jaringan maks 2 detik
+
+// Ambang batas perubahan daya instan (Event-driven Telemetry)
+const float AMBANG_LONJAKAN_DAYA = 3.0f;               // Jika daya berubah >= 3 Watt, kirim langsung ke cloud
+const unsigned long COOLDOWN_KIRIM_INSTAN = 700UL;     // Cooldown minimal 700 ms antar kirim instan
 
 unsigned long waktuHalamanOtomatis = 0;
 unsigned long waktuTombolTerakhir = 0;
@@ -254,6 +258,10 @@ unsigned long waktuBacaCtrlTerakhir = 0;
 unsigned long waktuCobaWiFiTerakhir = 0;
 unsigned long waktuCobaLoginTerakhir = 0;
 unsigned long waktuTokenDidapat = 0; // rollover-safe reference
+
+// Cache state telemetri terakhir untuk deteksi perubahan cepat
+float dayaTerkirimTerakhir = 0.0f;
+bool relayTerkirimTerakhir = false;
 
 // ============================================================
 //  FIREBASE AUTH & NETWORK STATE
@@ -581,6 +589,23 @@ void loop() {
     if (!modeTombol && halaman == 0) {
       tampilKondisi();
     }
+
+    // --- DETEKSI PERUBAHAN DAYA INSTAN (EVENT-DRIVEN TELEMETRY) ---
+    // Jika ada beban dinyalakan/dimatikan (perubahan daya >= 3W) atau relay berubah,
+    // langsung kirim telemetri ke cloud tanpa menunggu timer berkala!
+    if (wifiTerhubung && firebaseLogin && sensorValid) {
+      float deltaDaya = fabs(daya - dayaTerkirimTerakhir);
+      bool lonjakanDaya = (deltaDaya >= AMBANG_LONJAKAN_DAYA);
+      bool relayBerubah = (relayOutputState != relayTerkirimTerakhir);
+
+      if ((lonjakanDaya || relayBerubah) &&
+          (sekarang - waktuKirimCloudTerakhir >= COOLDOWN_KIRIM_INSTAN)) {
+        waktuKirimCloudTerakhir = sekarang;
+        kirimTelemetriCloud();
+        dayaTerkirimTerakhir = daya;
+        relayTerkirimTerakhir = relayOutputState;
+      }
+    }
   }
 
   // --- 2. PELAYANAN TOMBOL PENGGUNA (Respon Instan) ---
@@ -616,14 +641,16 @@ void loop() {
     }
   }
 
-  // --- 6. PENGIRIMAN TELEMETRI CLOUD / EMULATOR (Setiap 5 Detik) ---
+  // --- 6. PENGIRIMAN TELEMETRI CLOUD BERKALA (Setiap 2 Detik) ---
   if (wifiTerhubung && firebaseLogin &&
       (sekarang - waktuKirimCloudTerakhir >= INTERVAL_KIRIM_CLOUD)) {
     waktuKirimCloudTerakhir = sekarang;
     kirimTelemetriCloud();
+    dayaTerkirimTerakhir = daya;
+    relayTerkirimTerakhir = relayOutputState;
   }
 
-  // --- 7. PEMBACAAN PERINTAH KONTROL DARI RTDB (Setiap 3 Detik) ---
+  // --- 7. PEMBACAAN PERINTAH KONTROL DARI RTDB (Setiap 1 Detik) ---
   if (wifiTerhubung && firebaseLogin &&
       (sekarang - waktuBacaCtrlTerakhir >= INTERVAL_BACA_CTRL)) {
     waktuBacaCtrlTerakhir = sekarang;
@@ -670,12 +697,20 @@ void initHardware() {
 
 void setRelayOutput(bool state) {
 #if ENABLE_RELAY_CONTROL
+  bool stateLama = relayOutputState;
   // Relay diizinkan beroperasi
   relayOutputState = state;
   digitalWrite(RELAY_PIN,
                RELAY_ACTIVE_LOW ? (state ? LOW : HIGH) : (state ? HIGH : LOW));
   Serial.printf("[RELAY] Output GPIO diubah: %s\n",
                 state ? "ON (Tutup)" : "OFF (Buka)");
+  // Jika status relay berubah dan terhubung ke cloud, kirim konfirmasi telemetri instan
+  if (stateLama != state && wifiTerhubung && firebaseLogin) {
+    waktuKirimCloudTerakhir = millis();
+    kirimTelemetriCloud();
+    dayaTerkirimTerakhir = daya;
+    relayTerkirimTerakhir = relayOutputState;
+  }
 #else
   // STAGING GUARD: Relay TIDAK diizinkan bergerak
   // relayOutputState selalu false (OFF), tidak pernah diubah oleh perintah yang
