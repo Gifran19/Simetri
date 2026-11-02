@@ -13,15 +13,15 @@ void main() {
       SharedPreferences.setMockInitialValues({});
     });
 
-    test('DeviceService defaults to simetri_01 and saves new paired device ID', () async {
-      expect(await DeviceService.getPairedDeviceId(), equals('simetri_01'));
+    test('DeviceService defaults to SIMETRI_ESP32_001 and saves new paired device ID', () async {
+      expect(await DeviceService.getPairedDeviceId(), equals('SIMETRI_ESP32_001'));
 
       await DeviceService.savePairedDeviceId('esp32_kamar_02');
       expect(await DeviceService.getPairedDeviceId(), equals('esp32_kamar_02'));
       expect(DeviceService.deviceIdNotifier.value, equals('esp32_kamar_02'));
 
       await DeviceService.clearPairedDevice();
-      expect(await DeviceService.getPairedDeviceId(), equals('simetri_01'));
+      expect(await DeviceService.getPairedDeviceId(), equals('SIMETRI_ESP32_001'));
       expect(await DeviceService.isDeviceConnected(), isFalse);
     });
 
@@ -38,7 +38,7 @@ void main() {
 
   group('ConnectDeviceSheet Admin Approval UI Tests', () {
     testWidgets('ConnectDeviceSheet renders anonymous UID, device ID input, and verify button', (tester) async {
-      SharedPreferences.setMockInitialValues({'simetri_paired_device_id': 'simetri_01'});
+      SharedPreferences.setMockInitialValues({'simetri_paired_device_id': 'SIMETRI_ESP32_001'});
 
       await tester.pumpWidget(
         MaterialApp(

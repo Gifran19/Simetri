@@ -28,7 +28,7 @@ class SensorStreamService {
   static final SensorStreamService instance = SensorStreamService._internal();
   SensorStreamService._internal();
 
-  String _activeDeviceId = 'simetri_01';
+  String _activeDeviceId = 'SIMETRI_ESP32_001';
   String get activeDeviceId => _activeDeviceId;
 
   String get rtdbDevicePath => 'devices/$_activeDeviceId';

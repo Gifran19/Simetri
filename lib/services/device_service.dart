@@ -29,7 +29,7 @@ class DeviceService {
   static const String _keyBiometricEnabled = 'simetri_biometric_enabled';
   static const String _keyHasOnboarded = 'simetri_has_onboarded';
   static const String _keyDeviceId = 'simetri_paired_device_id';
-  static const String defaultDeviceId = 'simetri_01';
+  static const String defaultDeviceId = 'SIMETRI_ESP32_001';
 
   // =========================
   // PRESET RESMI PLN INDONESIA
@@ -136,7 +136,10 @@ class DeviceService {
   /// Ambil Kode / ID Perangkat ESP32 yang terhubung
   static Future<String> getPairedDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
-    final deviceId = prefs.getString(_keyDeviceId) ?? defaultDeviceId;
+    final savedId = prefs.getString(_keyDeviceId);
+    final deviceId = (savedId == null || savedId.isEmpty || savedId == 'simetri_01')
+        ? defaultDeviceId
+        : savedId;
     if (deviceIdNotifier.value != deviceId) {
       deviceIdNotifier.value = deviceId;
     }
