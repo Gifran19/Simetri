@@ -209,6 +209,9 @@ class SensorStreamService {
             try {
               final reading = SensorReading.fromMap(raw, isFromFirebase: true);
               _latest = reading;
+              if (reading.appliedTariffPerKwh != null && reading.appliedTariffPerKwh! > 0) {
+                DeviceService.setTariffFromCloud(reading.appliedTariffPerKwh!);
+              }
               if (!_controller.isClosed) _controller.add(reading);
             } catch (e) {
               debugPrint('Error parsing Firebase sensor data: $e');
@@ -237,8 +240,10 @@ class SensorStreamService {
           final raw = event.snapshot.value;
           if (event.snapshot.exists && raw is Map) {
             final t = raw['tariff_per_kwh'];
-            if (t is num) {
-              _targetControlTariff = t.toDouble();
+            if (t is num && t > 0) {
+              final tariffVal = t.toDouble();
+              _targetControlTariff = tariffVal;
+              DeviceService.setTariffFromCloud(tariffVal);
               _recomputeTariffSync();
             }
           }

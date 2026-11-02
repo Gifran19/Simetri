@@ -29,6 +29,8 @@ class DeviceService {
   static const String _keyBiometricEnabled = 'simetri_biometric_enabled';
   static const String _keyHasOnboarded = 'simetri_has_onboarded';
   static const String _keyDeviceId = 'simetri_paired_device_id';
+  static const String _keyTariff = 'simetri_current_tariff';
+  static const String _keyTariffDate = 'simetri_tariff_active_date';
   static const String defaultDeviceId = 'SIMETRI_ESP32_001';
 
   // =========================
@@ -76,9 +78,28 @@ class DeviceService {
   // DATA TARIF AKTIF
   // =========================
 
-  static double currentTariff = 1352;
+  // Notifier tarif reaktif global agar UI langsung ter-update otomatis saat
+  // tarif diubah oleh pemilik atau diterima dari perangkat cloud.
+  static final ValueNotifier<double> tariffNotifier = ValueNotifier<double>(1352.0);
+  static double get currentTariff => tariffNotifier.value;
+  static set currentTariff(double val) => tariffNotifier.value = val;
+
   static String tariffActiveDate = "08 Oktober 2026";
   static String tariffNote = "Penyesuaian tarif awal";
+
+  /// Inisialisasi tarif dari penyimpanan persisten lokal
+  static Future<double> initTariff() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedTariff = prefs.getDouble(_keyTariff);
+    final savedDate = prefs.getString(_keyTariffDate);
+    if (savedTariff != null && savedTariff > 0) {
+      tariffNotifier.value = savedTariff;
+    }
+    if (savedDate != null && savedDate.isNotEmpty) {
+      tariffActiveDate = savedDate;
+    }
+    return tariffNotifier.value;
+  }
 
   // =========================
   // RIWAYAT PERUBAHAN TARIF
@@ -97,20 +118,54 @@ class DeviceService {
   // UPDATE TARIF
   // =========================
 
+  /// Memperbarui tarif listrik dan menyimpannya ke preferensi lokal
   static void updateTariff(double newTariff, String date, String note) {
+    final old = tariffNotifier.value;
     tariffHistory.insert(
       0,
       TariffHistory(
-        oldTariff: currentTariff,
+        oldTariff: old,
         newTariff: newTariff,
         date: date,
         note: note.isEmpty ? "Pembaruan tarif manual" : note,
       ),
     );
 
-    currentTariff = newTariff;
+    tariffNotifier.value = newTariff;
     tariffActiveDate = date;
     tariffNote = note;
+
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setDouble(_keyTariff, newTariff);
+      prefs.setString(_keyTariffDate, date);
+    });
+  }
+
+  /// Memperbarui tarif dari konfigurasi cloud (control/tariff_per_kwh atau live/tariff_per_kwh).
+  /// Menjamin bahwa seluruh rekan/anggota yang terhubung ke perangkat ini otomatis tersinkronkan.
+  static void setTariffFromCloud(double newTariff, {String? date}) {
+    if (newTariff <= 0) return;
+    if ((tariffNotifier.value - newTariff).abs() > 0.01) {
+      final old = tariffNotifier.value;
+      tariffNotifier.value = newTariff;
+      if (date != null && date.isNotEmpty) {
+        tariffActiveDate = date;
+      }
+      tariffHistory.insert(
+        0,
+        TariffHistory(
+          oldTariff: old,
+          newTariff: newTariff,
+          date: tariffActiveDate,
+          note: "Disinkronkan dari perangkat cloud",
+        ),
+      );
+
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setDouble(_keyTariff, newTariff);
+        if (date != null) prefs.setString(_keyTariffDate, date);
+      });
+    }
   }
 
   /// Memperbarui tarif secara lokal dan mengirimkannya ke Firebase Cloud control/tariff_per_kwh

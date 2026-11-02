@@ -62,6 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
     SensorStreamService.instance.statusNotifier.addListener(_onStatusChanged);
     DeviceService.connectionNotifier.addListener(_onConnectionNotifierChanged);
     DeviceService.deviceIdNotifier.addListener(_onDeviceIdChanged);
+    DeviceService.initTariff();
     _initSensorStream();
     _initHistoryStreams();
     _loadSavedConnectionState();
@@ -917,12 +918,17 @@ class _HomeScreenState extends State<HomeScreen> {
         ValueListenableBuilder<TariffSyncStatus>(
           valueListenable: SensorStreamService.instance.tariffSyncNotifier,
           builder: (context, syncStatus, _) {
-            return TariffCard(
-              tariff: DeviceService.currentTariff,
-              activeDate: DeviceService.tariffActiveDate,
-              syncStatus: syncStatus,
-              appliedTariff: _latestReading?.appliedTariffPerKwh,
-              onTariffChanged: _handleTariffChanged,
+            return ValueListenableBuilder<double>(
+              valueListenable: DeviceService.tariffNotifier,
+              builder: (context, currentTariff, _) {
+                return TariffCard(
+                  tariff: currentTariff,
+                  activeDate: DeviceService.tariffActiveDate,
+                  syncStatus: syncStatus,
+                  appliedTariff: _latestReading?.appliedTariffPerKwh,
+                  onTariffChanged: _handleTariffChanged,
+                );
+              },
             );
           },
         ),
@@ -1031,12 +1037,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   ValueListenableBuilder<TariffSyncStatus>(
                     valueListenable: SensorStreamService.instance.tariffSyncNotifier,
                     builder: (context, syncStatus, _) {
-                      return TariffCard(
-                        tariff: DeviceService.currentTariff,
-                        activeDate: DeviceService.tariffActiveDate,
-                        syncStatus: syncStatus,
-                        appliedTariff: _latestReading?.appliedTariffPerKwh,
-                        onTariffChanged: _handleTariffChanged,
+                      return ValueListenableBuilder<double>(
+                        valueListenable: DeviceService.tariffNotifier,
+                        builder: (context, currentTariff, _) {
+                          return TariffCard(
+                            tariff: currentTariff,
+                            activeDate: DeviceService.tariffActiveDate,
+                            syncStatus: syncStatus,
+                            appliedTariff: _latestReading?.appliedTariffPerKwh,
+                            onTariffChanged: _handleTariffChanged,
+                          );
+                        },
                       );
                     },
                   ),

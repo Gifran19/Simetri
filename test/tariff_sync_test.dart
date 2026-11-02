@@ -135,7 +135,19 @@ void main() {
 
       DeviceService.updateTariff(1500.0, '2026-10-29', 'Penyesuaian Oktober');
       expect(DeviceService.currentTariff, equals(1500.0));
+      expect(DeviceService.tariffNotifier.value, equals(1500.0));
       expect(DeviceService.tariffActiveDate, equals('2026-10-29'));
+
+      // Test setTariffFromCloud (e.g. cloud sends updated tariff to all connected members)
+      DeviceService.setTariffFromCloud(2000.0, date: '2026-11-02');
+      expect(DeviceService.currentTariff, equals(2000.0));
+      expect(DeviceService.tariffNotifier.value, equals(2000.0));
+      expect(DeviceService.tariffActiveDate, equals('2026-11-02'));
+
+      // Test initTariff restores persisted tariff after app restart (relog)
+      DeviceService.tariffNotifier.value = 1352.0; // Simulate RAM reset
+      await DeviceService.initTariff();
+      expect(DeviceService.currentTariff, equals(2000.0));
     });
 
     test('EnergyDatabaseService weekly energy parsing handles list and map structures without duplication', () {
