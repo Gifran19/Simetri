@@ -360,6 +360,7 @@ void masukModeWiFiManager() {
   lcd.print("AP: SIMETRI-SETUP");
 
   WiFiManager wm;
+  wm.resetSettings(); // Menghapus kredensial Wi-Fi lama dari memori (Logout total)
   wm.setAPCallback(configModeCallback);
   wm.setSaveConfigCallback(saveConfigCallback);
   wm.setConfigPortalTimeout(180);
