@@ -593,8 +593,8 @@ void loop() {
     // --- DETEKSI PERUBAHAN DAYA INSTAN (EVENT-DRIVEN TELEMETRY) ---
     // Jika ada beban dinyalakan/dimatikan (perubahan daya >= 3W) atau relay berubah,
     // langsung kirim telemetri ke cloud tanpa menunggu timer berkala!
-    if (wifiTerhubung && firebaseLogin && sensorValid) {
-      float deltaDaya = fabs(daya - dayaTerkirimTerakhir);
+    if (wifiTerhubung && firebaseLogin && sensorReadSuccess && !isnan(power)) {
+      float deltaDaya = fabs(power - dayaTerkirimTerakhir);
       bool lonjakanDaya = (deltaDaya >= AMBANG_LONJAKAN_DAYA);
       bool relayBerubah = (relayOutputState != relayTerkirimTerakhir);
 
@@ -602,7 +602,7 @@ void loop() {
           (sekarang - waktuKirimCloudTerakhir >= COOLDOWN_KIRIM_INSTAN)) {
         waktuKirimCloudTerakhir = sekarang;
         kirimTelemetriCloud();
-        dayaTerkirimTerakhir = daya;
+        dayaTerkirimTerakhir = power;
         relayTerkirimTerakhir = relayOutputState;
       }
     }
@@ -646,7 +646,7 @@ void loop() {
       (sekarang - waktuKirimCloudTerakhir >= INTERVAL_KIRIM_CLOUD)) {
     waktuKirimCloudTerakhir = sekarang;
     kirimTelemetriCloud();
-    dayaTerkirimTerakhir = daya;
+    dayaTerkirimTerakhir = !isnan(power) ? power : 0.0f;
     relayTerkirimTerakhir = relayOutputState;
   }
 
@@ -708,7 +708,7 @@ void setRelayOutput(bool state) {
   if (stateLama != state && wifiTerhubung && firebaseLogin) {
     waktuKirimCloudTerakhir = millis();
     kirimTelemetriCloud();
-    dayaTerkirimTerakhir = daya;
+    dayaTerkirimTerakhir = !isnan(power) ? power : 0.0f;
     relayTerkirimTerakhir = relayOutputState;
   }
 #else
