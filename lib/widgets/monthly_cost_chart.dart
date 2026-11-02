@@ -27,44 +27,25 @@ class MonthlyCostChart extends StatelessWidget {
     final bool isEmpty = data.isEmpty || data.every((e) => e <= 0.0);
     final double maxCost = isEmpty ? 0.0 : data.reduce((a, b) => a > b ? a : b);
 
-    // Jika biaya tahunan sudah mencapai ribuan (>= 1.000), gunakan skala 'K' (ribu)
-    // Jika biaya masih kecil (misal Rp 3), gunakan skala Rupiah langsung tanpa membagi 1000
-    final bool useRibuan = maxCost >= 1000.0;
-    final normalizedData = data.map((val) => useRibuan ? val / 1000.0 : val).toList();
+    // Selalu gunakan skala 'K' (ribu) standar rumah tangga
+    final normalizedData = data.map((val) => val / 1000.0).toList();
+    final double normMax = maxCost / 1000.0;
 
-    // Hitung maxY dan interval dinamis dengan headroom yang cukup (30-60%) agar bar tidak mentok atas
+    // Hitung maxY dan interval dinamis dengan basis standar rumah tangga (0 - 150 Ribu Rp)
     final double maxY;
     final double interval;
-    if (isEmpty || maxCost <= 0.0) {
-      maxY = 100.0;
-      interval = 20.0;
-    } else if (!useRibuan) {
-      if (maxCost <= 4.0) {
-        maxY = 6.0;
-        interval = 2.0;
-      } else if (maxCost <= 8.0) {
-        maxY = 12.0;
-        interval = 3.0;
-      } else if (maxCost <= 15.0) {
-        maxY = 24.0;
-        interval = 6.0;
-      } else if (maxCost <= 35.0) {
-        maxY = 50.0;
-        interval = 10.0;
-      } else if (maxCost <= 75.0) {
-        maxY = 100.0;
-        interval = 20.0;
-      } else if (maxCost <= 350.0) {
-        maxY = 500.0;
-        interval = 100.0;
-      } else {
-        maxY = ((maxCost * 1.3 / 100).ceil() * 100).toDouble();
-        interval = (maxY / 5).ceilToDouble();
-      }
+    if (isEmpty || normMax <= 150.0) {
+      maxY = 150.0;
+      interval = 30.0;
+    } else if (normMax <= 300.0) {
+      maxY = 300.0;
+      interval = 60.0;
+    } else if (normMax <= 600.0) {
+      maxY = 600.0;
+      interval = 100.0;
     } else {
-      final normMax = maxCost / 1000.0;
-      maxY = normMax > 150 ? ((normMax * 1.3 / 20).ceil() * 20).toDouble() : 180.0;
-      interval = maxY > 200 ? 50.0 : 20.0;
+      maxY = ((normMax * 1.25 / 50).ceil() * 50).toDouble();
+      interval = (maxY / 5).ceilToDouble();
     }
 
     return Container(
@@ -110,9 +91,9 @@ class MonthlyCostChart extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          Text(
-            useRibuan ? 'Rp (dalam ribuan)' : 'Rupiah (Rp)',
-            style: const TextStyle(color: Colors.white70, fontSize: 11),
+          const Text(
+            'Rp (dalam ribuan)',
+            style: TextStyle(color: Colors.white70, fontSize: 11),
           ),
           const SizedBox(height: 12),
 
@@ -144,7 +125,7 @@ class MonthlyCostChart extends StatelessWidget {
                         // Ambil biaya riil dari data asli
                         final actualCost = (group.x >= 0 && group.x < data.length)
                             ? data[group.x].round()
-                            : (rod.toY * (useRibuan ? 1000 : 1)).round();
+                            : (rod.toY * 1000).round();
                         final formatted = NumberFormat('#,###', 'id_ID').format(actualCost);
                         return BarTooltipItem(
                           '$monthName\nRp $formatted',
@@ -164,15 +145,13 @@ class MonthlyCostChart extends StatelessWidget {
                       sideTitles: SideTitles(
                         showTitles: true,
                         interval: interval,
-                        reservedSize: useRibuan ? 38 : 34,
+                        reservedSize: 38,
                         getTitlesWidget: (value, meta) {
                           if (value < 0 || value > maxY + (interval * 0.1)) {
                             return const SizedBox();
                           }
                           final valInt = value.toInt();
-                          final text = useRibuan
-                              ? (valInt == 0 ? '0' : '${valInt}K')
-                              : valInt.toString();
+                          final text = valInt == 0 ? '0' : '${valInt}K';
                           return Text(
                             text,
                             textAlign: TextAlign.right,

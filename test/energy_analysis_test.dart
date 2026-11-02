@@ -145,7 +145,7 @@ void main() {
       expect(find.text('Pemakaian Energi Bulanan'), findsOneWidget);
     });
 
-    testWidgets('7. MonthlyCostChart menampilkan satuan Rupiah (Rp) dan TIDAK menampilkan "Belum ada data"', (tester) async {
+    testWidgets('7. MonthlyCostChart menampilkan satuan standar ribuan dan TIDAK menampilkan "Belum ada data"', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -158,8 +158,8 @@ void main() {
 
       // Badge 'Belum ada data' TIDAK boleh muncul
       expect(find.text('Belum ada data'), findsNothing);
-      // Subtitle satuan harus 'Rupiah (Rp)', bukan 'Rp (dalam ribuan)' karena biaya < 1000
-      expect(find.text('Rupiah (Rp)'), findsOneWidget);
+      // Subtitle satuan standar rumah tangga 'Rp (dalam ribuan)'
+      expect(find.text('Rp (dalam ribuan)'), findsOneWidget);
       expect(find.text('Perbandingan Biaya Bulanan'), findsOneWidget);
     });
 

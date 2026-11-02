@@ -33,48 +33,20 @@ class MonthlyEnergyChart extends StatelessWidget {
     final displayData = isEmpty ? List<double>.filled(12, 0.0) : data;
     final maxVal = isEmpty ? 0.0 : displayData.reduce((a, b) => a > b ? a : b);
 
-    // Hitung maxY dan interval dinamis dengan headroom yang cukup (30-60% di atas nilai maksimal)
-    // agar bar proporsional, bernafas lega, dan TIDAK menyentuh batas atas/menutup label
+    // Hitung maxY dan interval dinamis dengan rentang standar rumah tangga normal (0 - 100 kWh)
     final double maxY;
     final double interval;
-    if (isEmpty || maxVal <= 0.0) {
+    if (isEmpty || maxVal <= 100.0) {
       maxY = 100.0;
       interval = 20.0;
-    } else if (maxVal <= 0.005) {
-      maxY = 0.008;
-      interval = 0.002;
-    } else if (maxVal <= 0.01) {
-      maxY = 0.016;
-      interval = 0.004;
-    } else if (maxVal <= 0.02) {
-      maxY = 0.030;
-      interval = 0.010;
-    } else if (maxVal <= 0.05) {
-      maxY = 0.080;
-      interval = 0.020;
-    } else if (maxVal <= 0.1) {
-      maxY = 0.150;
-      interval = 0.050;
-    } else if (maxVal <= 0.5) {
-      maxY = 0.8;
-      interval = 0.2;
-    } else if (maxVal <= 1.0) {
-      maxY = 1.5;
-      interval = 0.5;
-    } else if (maxVal <= 5.0) {
-      maxY = 8.0;
-      interval = 2.0;
-    } else if (maxVal <= 10.0) {
-      maxY = 15.0;
-      interval = 5.0;
-    } else if (maxVal <= 50.0) {
-      maxY = 80.0;
-      interval = 20.0;
-    } else if (maxVal <= 150.0) {
+    } else if (maxVal <= 200.0) {
       maxY = 200.0;
       interval = 50.0;
+    } else if (maxVal <= 500.0) {
+      maxY = 500.0;
+      interval = 100.0;
     } else {
-      maxY = ((maxVal * 1.3 / 20).ceil() * 20).toDouble();
+      maxY = ((maxVal * 1.25 / 50).ceil() * 50).toDouble();
       interval = (maxY / 5).ceilToDouble();
     }
 
@@ -169,23 +141,13 @@ class MonthlyEnergyChart extends StatelessWidget {
                           sideTitles: SideTitles(
                             showTitles: true,
                             interval: interval,
-                            reservedSize: maxY < 1.0 ? 44 : 32,
+                            reservedSize: 32,
                             getTitlesWidget: (value, meta) {
                               if (value < 0 || value > maxY + (interval * 0.05)) {
                                 return const SizedBox();
                               }
-                              final String labelText;
-                              if (maxY <= 0.01) {
-                                labelText = value.toStringAsFixed(3);
-                              } else if (maxY <= 0.1) {
-                                labelText = value.toStringAsFixed(3);
-                              } else if (maxY <= 1.0) {
-                                labelText = value.toStringAsFixed(1);
-                              } else {
-                                labelText = value.toInt().toString();
-                              }
                               return Text(
-                                labelText,
+                                value.toInt().toString(),
                                 textAlign: TextAlign.right,
                                 style: const TextStyle(color: Colors.white70, fontSize: 10),
                               );
