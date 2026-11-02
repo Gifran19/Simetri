@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 
 import '../firebase_options.dart';
 import '../models/sensor_reading.dart';
+import 'device_service.dart';
 import 'live_status.dart';
 
 /// Service untuk streaming telemetri PZEM-004T dari ESP32 via Firebase RTDB
