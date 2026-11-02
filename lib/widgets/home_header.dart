@@ -33,7 +33,11 @@ class HomeHeader extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Image.asset('assets/simetri_logo.png', width: isSmall ? 95 : 115),
+                    Image.asset(
+                      'assets/simetri_logo.png',
+                      width: isSmall ? 100 : 120,
+                      fit: BoxFit.contain,
+                    ),
                     const SizedBox(height: 12),
                     const Text(
                       'Selamat Datang,',

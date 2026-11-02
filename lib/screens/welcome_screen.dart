@@ -27,10 +27,10 @@ class WelcomeScreen extends StatelessWidget {
                       children: [
                         const SizedBox(),
 
-                        // LOGO
+                        // LOGO SIMETRI
                         Column(
                           children: [
-                            Image.asset('assets/logo.png', width: 240),
+                            Image.asset('assets/simetri_logo.png', width: 220, fit: BoxFit.contain),
                             const SizedBox(height: 16),
                           ],
                         ),
