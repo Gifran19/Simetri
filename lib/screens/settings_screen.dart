@@ -400,20 +400,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: const Icon(Icons.admin_panel_settings_rounded, color: Color(0xff00D9A6), size: 24),
                 ),
-                title: const Row(
+                title: Row(
                   children: [
-                    Text(
+                    const Text(
                       'Izin Akses Anggota',
                       style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                     ),
-                    SizedBox(width: 8),
+                    const SizedBox(width: 8),
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: const BoxDecoration(
                         color: Color(0xff00D9A6),
                         borderRadius: BorderRadius.all(Radius.circular(6)),
                       ),
-                      child: Text(
+                      child: const Text(
                         'OWNER',
                         style: TextStyle(color: Color(0xff071426), fontSize: 9, fontWeight: FontWeight.w900),
                       ),
