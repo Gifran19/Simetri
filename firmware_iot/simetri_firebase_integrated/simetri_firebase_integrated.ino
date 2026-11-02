@@ -61,6 +61,7 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
+#include <WiFiManager.h> // Library WiFiManager oleh tzapu (v2.0+)
 #include <Wire.h>
 #include <time.h>
 
@@ -76,8 +77,12 @@
     "USE_FIREBASE_EMULATOR belum ditentukan di secrets.h. Set true (emulator) atau false (cloud)."
 #endif
 
+// Wi-Fi sekarang dikelola secara fleksibel via WiFiManager Captive Portal ("SIMETRI-SETUP")
 #ifndef WIFI_SSID
-#error "WIFI_SSID tidak didefinisikan. Periksa secrets.h."
+#define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD ""
 #endif
 #ifndef DEVICE_ID
 #error "DEVICE_ID tidak didefinisikan. Periksa secrets.h."
@@ -302,6 +307,93 @@ String buildRtdbEnergyUrl();
 String buildRtdbAvailableYearsUrl();
 
 // ============================================================
+//  WIFIMANAGER CALLBACKS & SETUP PORTAL
+// ============================================================
+
+void configModeCallback(WiFiManager *myWiFiManager) {
+  Serial.println("[WiFiManager] Masuk mode Config Portal!");
+  Serial.printf("[WiFiManager] Hubungkan HP ke Access Point: %s (IP: %s)\n",
+                myWiFiManager->getConfigPortalSSID().c_str(),
+                WiFi.softAPIP().toString().c_str());
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SETUP WIFI SIMETRI");
+  lcd.setCursor(0, 1);
+  lcd.print("AP: SIMETRI-SETUP");
+
+  // Beep ganda sebagai tanda Access Point siap dikonfigurasi
+  tone(BUZZER_PIN, 1200);
+  delay(150);
+  noTone(BUZZER_PIN);
+  delay(100);
+  tone(BUZZER_PIN, 1200);
+  delay(150);
+  noTone(BUZZER_PIN);
+}
+
+void saveConfigCallback() {
+  Serial.println("[WiFiManager] Kredensial Wi-Fi disimpan. Menghubungkan...");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Menyimpan WiFi...");
+  lcd.setCursor(0, 1);
+  lcd.print("Menghubungkan...");
+}
+
+void masukModeWiFiManager() {
+  Serial.println("[WiFiManager] Tombol Kondisi ditahan 5 detik! Membuka Portal WiFi Setup...");
+
+  // Beep ganda konfirmasi masuk mode portal
+  tone(BUZZER_PIN, 1500);
+  delay(300);
+  noTone(BUZZER_PIN);
+  delay(150);
+  tone(BUZZER_PIN, 2000);
+  delay(400);
+  noTone(BUZZER_PIN);
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("PORTAL SETUP WIFI");
+  lcd.setCursor(0, 1);
+  lcd.print("AP: SIMETRI-SETUP");
+
+  WiFiManager wm;
+  wm.setAPCallback(configModeCallback);
+  wm.setSaveConfigCallback(saveConfigCallback);
+  wm.setConfigPortalTimeout(180);
+
+  bool res = wm.startConfigPortal("SIMETRI-SETUP");
+  if (res) {
+    Serial.println("[WiFiManager] Konfigurasi Wi-Fi baru berhasil disimpan dan terhubung!");
+    wifiTerhubung = true;
+    firebaseLogin = false;
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.google.com");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Terhubung!");
+    lcd.setCursor(0, 1);
+    String s = WiFi.SSID();
+    if (s.length() > 16) s = s.substring(0, 16);
+    lcd.print(s);
+    delay(2000);
+  } else {
+    Serial.println("[WiFiManager] Portal konfigurasi ditutup / timeout.");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Setup Ditutup");
+    lcd.setCursor(0, 1);
+    lcd.print("Kembali Bekerja");
+    delay(1500);
+  }
+
+  halaman = 0;
+  tampilKondisi();
+  waktuHalamanOtomatis = millis();
+}
+
+// ============================================================
 //  SETUP
 // ============================================================
 
@@ -311,7 +403,7 @@ void setup() {
 
   Serial.println();
   Serial.println("==================================================");
-  Serial.println("  SIMETRI Firebase Integrated Firmware v1.1.0     ");
+  Serial.println("  SIMETRI Firebase Integrated Firmware v1.2.0     ");
 #if USE_FIREBASE_EMULATOR
   Serial.println("  Mode Operasi : EMULATOR (HTTP lokal)            ");
   Serial.printf("  Emulator Host: %s (Auth:%d, RTDB:%d)            \n",
@@ -327,12 +419,49 @@ void setup() {
 
   initHardware();
 
-  // Inisialisasi Wi-Fi awal secara non-blocking
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  waktuCobaWiFiTerakhir = millis();
-  wifiConnectingStarted = true;
-  Serial.printf("[WiFi] Memulai koneksi ke: %s\n", WIFI_SSID);
+  // Tampilkan pesan awal pada LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SIMETRI ESP32");
+  lcd.setCursor(0, 1);
+  lcd.print("Cek Koneksi WiFi...");
+
+  // Inisialisasi WiFiManager oleh tzapu
+  WiFiManager wm;
+  wm.setAPCallback(configModeCallback);
+  wm.setSaveConfigCallback(saveConfigCallback);
+
+  // Batas waktu portal setup 180 detik (3 menit) agar jika tidak ada konfigurasi,
+  // ESP32 tetap lanjut mengukur daya secara offline tanpa hang
+  wm.setConfigPortalTimeout(180);
+  wm.setConnectTimeout(20);
+
+  Serial.println("[WiFiManager] Mencoba menyambung ke Wi-Fi tersimpan...");
+  bool res = wm.autoConnect("SIMETRI-SETUP");
+
+  if (!res) {
+    Serial.println("[WiFiManager] Tidak tersambung atau timeout portal tercapai. Beralih ke mode offline.");
+    wifiTerhubung = false;
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Mode Offline");
+    lcd.setCursor(0, 1);
+    lcd.print("Tahan Tbl 5d Setup");
+    delay(2000);
+  } else {
+    wifiTerhubung = true;
+    Serial.printf("[WiFiManager] Terhubung sukses! SSID: %s | IP: %s\n",
+                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org", "time.google.com");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Terhubung!");
+    lcd.setCursor(0, 1);
+    String s = WiFi.SSID();
+    if (s.length() > 16) s = s.substring(0, 16);
+    lcd.print(s);
+    delay(1500);
+  }
 
   // Inisialisasi NVS untuk menjaga akumulasi periode kalender saat ESP32
   // restart
@@ -688,6 +817,25 @@ void tanganiTombol() {
   bool h = digitalRead(TOMBOL_HARI);
   bool b = digitalRead(TOMBOL_BULAN);
 
+  // Deteksi penekanan tombol kondisi selama 5 detik untuk reset Wi-Fi & buka portal setup
+  static unsigned long waktuMulaiTekanKondisi = 0;
+  static bool portalDiterapkan = false;
+
+  if (k == LOW) {
+    if (waktuMulaiTekanKondisi == 0) {
+      waktuMulaiTekanKondisi = millis();
+      portalDiterapkan = false;
+    } else if (!portalDiterapkan && (millis() - waktuMulaiTekanKondisi >= 5000)) {
+      portalDiterapkan = true;
+      masukModeWiFiManager();
+      waktuMulaiTekanKondisi = 0;
+      return;
+    }
+  } else {
+    waktuMulaiTekanKondisi = 0;
+    portalDiterapkan = false;
+  }
+
   if (tombolKondisiSebelum == HIGH && k == LOW) {
     halaman = 0;
     tampilKondisi();
@@ -747,8 +895,8 @@ void kelolaKoneksiWiFi(unsigned long sekarang) {
   if (status == WL_CONNECTED) {
     if (!wifiTerhubung) {
       wifiTerhubung = true;
-      Serial.printf("[WiFi] Terhubung sukses. IP: %s | RSSI: %d dBm\n",
-                    WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      Serial.printf("[WiFi] Terhubung sukses. IP: %s | RSSI: %d dBm | SSID: %s\n",
+                    WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.SSID().c_str());
       // Sinkronisasi waktu sistem via SNTP (WIB UTC+7) penting untuk validasi
       // kalender & sertifikat TLS (X.509)
       Serial.println(
@@ -766,9 +914,8 @@ void kelolaKoneksiWiFi(unsigned long sekarang) {
     // Reconnect bertahap tanpa memblokir CPU loop
     if (sekarang - waktuCobaWiFiTerakhir >= INTERVAL_RETRY_WIFI) {
       waktuCobaWiFiTerakhir = sekarang;
-      Serial.printf("[WiFi] Mencoba menyambung kembali ke %s...\n", WIFI_SSID);
-      WiFi.disconnect();
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      Serial.println("[WiFi] Mencoba menyambung kembali ke Wi-Fi tersimpan...");
+      WiFi.reconnect();
     }
   }
 }

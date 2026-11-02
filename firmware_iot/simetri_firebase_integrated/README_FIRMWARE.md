@@ -79,6 +79,35 @@ ESP32 adalah mikrokontroler mandiri di jaringan Wi-Fi, sehingga **tidak dapat me
 
 ---
 
+## Setup Kredensial & Wi-Fi
+
+### 1. Library yang Dibutuhkan di Arduino IDE:
+Pastikan library berikut sudah terpasang via **Library Manager** di Arduino IDE:
+- **`WiFiManager`** oleh tzapu (versi 2.0.16 atau terbaru untuk ESP32)
+- **`ArduinoJson`** oleh Benoît Blanchon (versi 6.x atau 7.x)
+- **`PZEM004Tv30`** oleh Mandar (versi 3.1.2)
+- **`LiquidCrystal_I2C`** oleh Frank de Brabander (versi 1.1.2)
+
+### 2. Cara Konfigurasi Wi-Fi Baru (Pertama Kali):
+1. Nyalakan ESP32 SIMETRI.
+2. Jika belum ada Wi-Fi tersimpan di memori NVS ESP32, ESP32 otomatis menyalakan Access Point (hotspot) bernama **`SIMETRI-SETUP`** (tanpa password) dan LCD menampilkan:
+   ```text
+   SETUP WIFI SIMETRI
+   AP: SIMETRI-SETUP
+   ```
+3. Buka pengaturan Wi-Fi di HP / Komputer Anda, lalu sambungkan ke hotspot **`SIMETRI-SETUP`**.
+4. Jendela Captive Portal browser akan otomatis terbuka di HP (atau buka browser dan ketik alamat IP `192.168.4.1`).
+5. Klik **"Configure WiFi"**, pilih nama Wi-Fi rumah/kantor Anda dari daftar, masukkan password Wi-Fi, lalu klik **"Save"**.
+6. ESP32 akan menyimpan kredensial ke memori internal secara permanen, me-restart modul Wi-Fi, dan langsung terhubung secara otomatis.
+
+### 3. Cara Mengganti / Reset Wi-Fi Kapan Saja:
+- Jika Anda pindah lokasi atau mengganti router/password Wi-Fi, Anda tidak perlu memprogram ulang ESP32:
+- Cukup tekan dan **tahan tombol Kondisi (GPIO 25) selama 5 detik**.
+- Buzzer akan berbunyi konfirmasi nada ganda dan LCD menampilkan `PORTAL SETUP WIFI`.
+- Hotspot **`SIMETRI-SETUP`** akan kembali aktif dan Anda bisa memasukkan Wi-Fi baru melalui HP Anda.
+
+---
+
 ## Keamanan Relay (`ENABLE_RELAY_CONTROL`)
 
 Nilai default adalah `false` (Staging Guard).

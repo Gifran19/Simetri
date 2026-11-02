@@ -33,9 +33,12 @@
 // Set false : Menggunakan HTTPS + Verifikasi CA ke Firebase Cloud produksi
 #define USE_FIREBASE_EMULATOR    true
 
-// ------ Konfigurasi Wi-Fi -----------------------------------
-#define WIFI_SSID                "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD            "YOUR_WIFI_PASSWORD"
+// ------ Konfigurasi Wi-Fi (Opsional - Dikelola oleh WiFiManager) --
+// Wi-Fi sekarang dikonfigurasi melalui Web Captive Portal pada hotspot "SIMETRI-SETUP".
+// Nilai di bawah ini bersifat opsional (dapat dikosongkan "") karena ESP32 otomatis
+// membuka portal konfigurasi jika belum ada Wi-Fi tersimpan di memori NVS.
+#define WIFI_SSID                ""
+#define WIFI_PASSWORD            ""
 
 // ------ Identitas Perangkat ---------------------------------
 // Device ID harus sesuai dengan yang didaftarkan pada backend
