@@ -102,40 +102,46 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
     _loadWeekData(now);
   }
 
-  Future<void> _pickDate(BuildContext context) async {
-    final now = DateTime.now();
-    final initial = _selectedDate.isAfter(now) ? now : _selectedDate;
-
-    final picked = await showDatePicker(
+  Future<void> _pickDate() async {
+    final pickedMonday = await showDialog<DateTime>(
       context: context,
-      initialDate: initial,
-      firstDate: DateTime(2024, 1, 1),
-      lastDate: now,
-      helpText: 'PILIH TANGGAL HISTORI',
-      cancelText: 'BATAL',
-      confirmText: 'PILIH',
-      builder: (ctx, child) {
-        return Theme(
-          data: Theme.of(ctx).copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Color(0xff00D9A6),
-              onPrimary: Colors.black,
-              surface: Color(0xff0D1F3C),
-              onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xff0D1F3C),
-          ),
-          child: child ?? const SizedBox(),
-        );
-      },
+      builder: (ctx) => WeekRangePickerDialog(
+        initialDate: _selectedDate,
+      ),
     );
 
-    if (picked != null) {
-      setState(() {
-        _selectedDate = picked;
-      });
-      _loadWeekData(picked);
-    }
+    if (pickedMonday == null || !mounted) return;
+
+    setState(() {
+      _selectedDate = pickedMonday;
+    });
+    _loadWeekData(pickedMonday);
+
+    final sunday = pickedMonday.add(const Duration(days: 6));
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Color(0xff00D9A6), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Menampilkan 7 hari: ${_formatWeekRange(pickedMonday, sunday)}',
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xff10233F),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: Color(0xff00D9A6), width: 1),
+        ),
+      ),
+    );
   }
 
   String _formatWeekRange(DateTime mon, DateTime sun) {
@@ -223,7 +229,7 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header Row: Judul, Rentang Tanggal, & Tombol Kalender
+          // Header Row: Judul, Rentang Tanggal (7 Hari), & Tombol Kalender
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -236,17 +242,36 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
                       style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 3),
-                    Text(
-                      _formatWeekRange(monday, sunday),
-                      style: const TextStyle(color: Color(0xff00D9A6), fontSize: 12, fontWeight: FontWeight.w500),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            _formatWeekRange(monday, sunday),
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Color(0xff00D9A6), fontSize: 12, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: const Color(0xff00D9A6).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            '7 Hari',
+                            style: TextStyle(color: Color(0xff00D9A6), fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
               IconButton(
-                onPressed: () => _pickDate(context),
+                onPressed: _pickDate,
                 icon: const Icon(Icons.calendar_month_rounded, color: Color(0xff00D9A6), size: 22),
-                tooltip: 'Pilih Tanggal Kalender',
+                tooltip: 'Pilih Rentang 7 Hari (Senin – Minggu)',
                 style: IconButton.styleFrom(
                   backgroundColor: const Color(0xff00D9A6).withValues(alpha: 0.12),
                   padding: const EdgeInsets.all(8),
@@ -257,7 +282,7 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
           ),
           const SizedBox(height: 12),
 
-          // Navigasi Minggu: Minggu Lalu | Chip Status | Minggu Depan
+          // Navigasi Minggu: Minggu Lalu | Chip Status | Minggu Depan (Anti-Overflow)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             decoration: BoxDecoration(
@@ -266,42 +291,51 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
               border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
             ),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Tombol Minggu Lalu
-                InkWell(
-                  onTap: canGoBackward ? _previousWeek : null,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.chevron_left_rounded,
-                          color: canGoBackward ? const Color(0xff00D9A6) : Colors.white24,
-                          size: 18,
+                // Tombol Minggu Lalu (Terikat ke sisi kiri)
+                Expanded(
+                  flex: 3,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: InkWell(
+                      onTap: canGoBackward ? _previousWeek : null,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.chevron_left_rounded,
+                              color: canGoBackward ? const Color(0xff00D9A6) : Colors.white24,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 2),
+                            Flexible(
+                              child: Text(
+                                'Minggu Lalu',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: canGoBackward ? Colors.white70 : Colors.white24,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 2),
-                        Text(
-                          'Minggu Lalu',
-                          style: TextStyle(
-                            color: canGoBackward ? Colors.white70 : Colors.white24,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
 
-                // Indikator / Tombol Reset ke Minggu Ini
+                // Indikator / Tombol Reset ke Minggu Ini (Di tengah)
                 if (!_isCurrentWeek)
                   InkWell(
                     onTap: _resetToCurrentWeek,
                     borderRadius: BorderRadius.circular(8),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                       decoration: BoxDecoration(
                         color: const Color(0xff00D9A6).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
@@ -310,10 +344,10 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.replay_rounded, color: Color(0xff00D9A6), size: 13),
+                          Icon(Icons.replay_rounded, color: Color(0xff00D9A6), size: 12),
                           SizedBox(width: 4),
                           Text(
-                            'Kembali ke Minggu Ini',
+                            'Minggu Ini',
                             style: TextStyle(
                               color: Color(0xff00D9A6),
                               fontSize: 10,
@@ -326,7 +360,7 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
                   )
                 else
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                     decoration: BoxDecoration(
                       color: const Color(0xff00D9A6).withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(6),
@@ -337,29 +371,39 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
                     ),
                   ),
 
-                // Tombol Minggu Depan
-                InkWell(
-                  onTap: canGoForward ? _nextWeek : null,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'Minggu Depan',
-                          style: TextStyle(
-                            color: canGoForward ? Colors.white70 : Colors.white24,
-                            fontSize: 11,
-                          ),
+                // Tombol Minggu Depan (Terikat ke sisi kanan)
+                Expanded(
+                  flex: 3,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: InkWell(
+                      onTap: canGoForward ? _nextWeek : null,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                'Minggu Depan',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: canGoForward ? Colors.white70 : Colors.white24,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              color: canGoForward ? const Color(0xff00D9A6) : Colors.white24,
+                              size: 18,
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 2),
-                        Icon(
-                          Icons.chevron_right_rounded,
-                          color: canGoForward ? const Color(0xff00D9A6) : Colors.white24,
-                          size: 18,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -561,6 +605,471 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Dialog khusus pemilihan rentang 7 hari (Senin s/d Minggu).
+/// Memastikan grafik histori harian selalu menerima dan menyajikan 7 hari utuh secara konsisten.
+class WeekRangePickerDialog extends StatefulWidget {
+  final DateTime initialDate;
+
+  const WeekRangePickerDialog({
+    super.key,
+    required this.initialDate,
+  });
+
+  @override
+  State<WeekRangePickerDialog> createState() => _WeekRangePickerDialogState();
+}
+
+class _WeekRangePickerDialogState extends State<WeekRangePickerDialog> {
+  static const List<String> _dayNames = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+  static const List<String> _monthNames = [
+    'Januari',
+    'Februari',
+    'Maret',
+    'April',
+    'Mei',
+    'Juni',
+    'Juli',
+    'Agustus',
+    'September',
+    'Oktober',
+    'November',
+    'Desember'
+  ];
+
+  late DateTime _viewMonth;
+  late DateTime _selectedMonday;
+  late final DateTime _today;
+  late final DateTime _currentWeekMonday;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _today = DateTime(now.year, now.month, now.day);
+    _currentWeekMonday = _today.subtract(Duration(days: _today.weekday - 1));
+
+    final initClean = DateTime(widget.initialDate.year, widget.initialDate.month, widget.initialDate.day);
+    _selectedMonday = initClean.subtract(Duration(days: initClean.weekday - 1));
+    if (_selectedMonday.isAfter(_currentWeekMonday)) {
+      _selectedMonday = _currentWeekMonday;
+    }
+    _viewMonth = DateTime(_selectedMonday.year, _selectedMonday.month, 1);
+  }
+
+  DateTime _getSunday(DateTime monday) {
+    return monday.add(const Duration(days: 6));
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  void _prevMonth() {
+    setState(() {
+      _viewMonth = DateTime(_viewMonth.year, _viewMonth.month - 1, 1);
+    });
+  }
+
+  void _nextMonth() {
+    final next = DateTime(_viewMonth.year, _viewMonth.month + 1, 1);
+    final currentMonthStart = DateTime(_today.year, _today.month, 1);
+    if (!next.isAfter(currentMonthStart)) {
+      setState(() {
+        _viewMonth = next;
+      });
+    }
+  }
+
+  void _selectPresetWeek(int weeksAgo) {
+    final target = _currentWeekMonday.subtract(Duration(days: 7 * weeksAgo));
+    setState(() {
+      _selectedMonday = target;
+      _viewMonth = DateTime(target.year, target.month, 1);
+    });
+  }
+
+  void _selectWeek(DateTime monday) {
+    if (monday.isAfter(_currentWeekMonday)) return;
+    setState(() {
+      _selectedMonday = monday;
+    });
+  }
+
+  String _formatWeekTitle(DateTime mon, DateTime sun) {
+    final monMonth = _monthNames[mon.month - 1];
+    final sunMonth = _monthNames[sun.month - 1];
+    if (mon.year != sun.year) {
+      return '${mon.day} $monMonth ${mon.year} – ${sun.day} $sunMonth ${sun.year}';
+    } else if (mon.month != sun.month) {
+      return '${mon.day} $monMonth – ${sun.day} $sunMonth ${sun.year}';
+    } else {
+      return '${mon.day} – ${sun.day} $monMonth ${sun.year}';
+    }
+  }
+
+  List<List<DateTime>> _buildMonthWeeks() {
+    final firstDayOfMonth = DateTime(_viewMonth.year, _viewMonth.month, 1);
+    final lastDayOfMonth = DateTime(_viewMonth.year, _viewMonth.month + 1, 0);
+
+    var currentDay = firstDayOfMonth.subtract(Duration(days: firstDayOfMonth.weekday - 1));
+    final lastSunday = lastDayOfMonth.add(Duration(days: 7 - lastDayOfMonth.weekday));
+
+    final List<List<DateTime>> weeks = [];
+    while (!currentDay.isAfter(lastSunday)) {
+      final List<DateTime> week = [];
+      for (int i = 0; i < 7; i++) {
+        week.add(currentDay);
+        currentDay = currentDay.add(const Duration(days: 1));
+      }
+      weeks.add(week);
+    }
+    return weeks;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sunday = _getSunday(_selectedMonday);
+    final weeks = _buildMonthWeeks();
+    final currentMonthStart = DateTime(_today.year, _today.month, 1);
+    final canGoNextMonth = _viewMonth.isBefore(currentMonthStart);
+    final canGoPrevMonth = _viewMonth.isAfter(DateTime(2024, 1, 1));
+
+    return Dialog(
+      backgroundColor: const Color(0xff0E203C),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Header Dialog
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xff00D9A6).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.date_range_rounded, color: Color(0xff00D9A6), size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Pilih Rentang 7 Hari',
+                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Senin sampai Minggu (1 Minggu Penuh)',
+                          style: TextStyle(color: Color(0xff00D9A6), fontSize: 11, fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+
+              // Card Rentang Terpilih
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xff0A192F),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xff00D9A6).withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.event_available_rounded, color: Color(0xff00D9A6), size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'RENTANG 7 HARI TERPILIH',
+                            style: TextStyle(
+                              color: Colors.white38,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _formatWeekTitle(_selectedMonday, sunday),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xff00D9A6).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        '7 Hari',
+                        style: TextStyle(
+                          color: Color(0xff00D9A6),
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Shortcut Presets
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _buildPresetChip('Minggu Ini', 0),
+                    const SizedBox(width: 6),
+                    _buildPresetChip('1 Minggu Lalu', 1),
+                    const SizedBox(width: 6),
+                    _buildPresetChip('2 Minggu Lalu', 2),
+                    const SizedBox(width: 6),
+                    _buildPresetChip('3 Minggu Lalu', 3),
+                    const SizedBox(width: 6),
+                    _buildPresetChip('4 Minggu Lalu', 4),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Calendar Month Navigation
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.chevron_left_rounded, color: Colors.white70),
+                      onPressed: canGoPrevMonth ? _prevMonth : null,
+                      tooltip: 'Bulan Sebelumnya',
+                    ),
+                    Text(
+                      '${_monthNames[_viewMonth.month - 1]} ${_viewMonth.year}',
+                      style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        Icons.chevron_right_rounded,
+                        color: canGoNextMonth ? Colors.white70 : Colors.white24,
+                      ),
+                      onPressed: canGoNextMonth ? _nextMonth : null,
+                      tooltip: 'Bulan Berikutnya',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 4),
+
+              // Day of Week Header (Senin s/d Minggu)
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.03),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: _dayNames.map((day) {
+                    final isWeekend = day == 'Sab' || day == 'Min';
+                    return Expanded(
+                      child: Center(
+                        child: Text(
+                          day,
+                          style: TextStyle(
+                            color: isWeekend ? const Color(0xff00D9A6).withValues(alpha: 0.8) : Colors.white60,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              const SizedBox(height: 6),
+
+              // Month Weeks Grid
+              Column(
+                children: weeks.map((week) {
+                  final weekMonday = week[0];
+                  final isSelected = _isSameDay(weekMonday, _selectedMonday);
+                  final isFutureWeek = weekMonday.isAfter(_currentWeekMonday);
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: InkWell(
+                      onTap: isFutureWeek ? null : () => _selectWeek(weekMonday),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? const Color(0xff00D9A6).withValues(alpha: 0.18)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isSelected ? const Color(0xff00D9A6) : Colors.transparent,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Row(
+                          children: week.map((date) {
+                            final isCurrentMonth = date.month == _viewMonth.month;
+                            final isFutureDate = date.isAfter(_today);
+                            final isToday = _isSameDay(date, _today);
+
+                            final Color textColor;
+                            if (isSelected) {
+                              textColor = isCurrentMonth
+                                  ? const Color(0xff00D9A6)
+                                  : const Color(0xff00D9A6).withValues(alpha: 0.5);
+                            } else if (isFutureDate) {
+                              textColor = Colors.white24;
+                            } else if (isCurrentMonth) {
+                              textColor = Colors.white;
+                            } else {
+                              textColor = Colors.white30;
+                            }
+
+                            return Expanded(
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '${date.day}',
+                                      style: TextStyle(
+                                        color: textColor,
+                                        fontSize: 12,
+                                        fontWeight: isSelected || isToday ? FontWeight.bold : FontWeight.normal,
+                                      ),
+                                    ),
+                                    if (isToday)
+                                      Container(
+                                        margin: const EdgeInsets.only(top: 2),
+                                        width: 4,
+                                        height: 4,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xff00D9A6),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 16),
+
+              // Action Buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white60,
+                        padding: const EdgeInsets.symmetric(vertical: 11),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('Batal'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.of(context).pop(_selectedMonday),
+                      icon: const Icon(Icons.check_rounded, size: 16),
+                      label: const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text('Terapkan (7 Hari)'),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xff00D9A6),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 11),
+                        textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPresetChip(String label, int weeksAgo) {
+    final targetMonday = _currentWeekMonday.subtract(Duration(days: 7 * weeksAgo));
+    final isSelected = _isSameDay(targetMonday, _selectedMonday);
+
+    return InkWell(
+      onTap: () => _selectPresetWeek(weeksAgo),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xff00D9A6).withValues(alpha: 0.2)
+              : const Color(0xff0A192F),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? const Color(0xff00D9A6) : Colors.white12,
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? const Color(0xff00D9A6) : Colors.white70,
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+          ),
+        ),
       ),
     );
   }

@@ -205,6 +205,74 @@ void main() {
       // Status 'Minggu Ini' harus ada
       expect(find.text('Minggu Ini'), findsOneWidget);
     });
+
+    testWidgets('10. DailyEnergyChart tidak overflow pada layar sempit (320px) saat berada di minggu lalu', (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // Past date (bukan minggu ini) agar tombol 'Minggu Ini' aktif
+      final pastDate = DateTime.now().subtract(const Duration(days: 14));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DailyEnergyChart(
+              initialDate: pastDate,
+              data: const [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+              isConnected: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Memastikan kedua tombol navigasi dan reset minggu ini ter-render tanpa RenderFlex overflow
+      expect(find.text('Minggu Lalu'), findsOneWidget);
+      expect(find.text('Minggu Depan'), findsOneWidget);
+      expect(find.text('Minggu Ini'), findsOneWidget);
+      expect(find.text('7 Hari'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('11. Membuka dialog kalender menampilkan WeekRangePickerDialog dengan keterangan 7 hari', (tester) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final weeklyData = [0.0, 0.0, 0.0, 0.0, 0.010, 0.0, 0.0];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DailyEnergyChart(
+              data: weeklyData,
+              isConnected: true,
+            ),
+          ),
+        ),
+      );
+
+      // Tap icon kalender
+      await tester.tap(find.byIcon(Icons.calendar_month_rounded));
+      await tester.pumpAndSettle();
+
+      // Dialog harus muncul dengan judul "Pilih Rentang 7 Hari"
+      expect(find.text('Pilih Rentang 7 Hari'), findsOneWidget);
+      expect(find.text('Senin sampai Minggu (1 Minggu Penuh)'), findsOneWidget);
+      expect(find.text('RENTANG 7 HARI TERPILIH'), findsOneWidget);
+      expect(find.text('Terapkan (7 Hari)'), findsOneWidget);
+
+      // Tap tombol Close
+      await tester.tap(find.byIcon(Icons.close_rounded));
+      await tester.pumpAndSettle();
+
+      // Dialog harus tertutup
+      expect(find.text('Pilih Rentang 7 Hari'), findsNothing);
+    });
   });
 }
 
