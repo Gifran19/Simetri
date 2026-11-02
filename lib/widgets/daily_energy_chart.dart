@@ -181,39 +181,24 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
     final displayData = isEmpty ? List<double>.filled(7, 0.0) : chartData;
     final maxVal = isEmpty ? 0.0 : displayData.reduce((a, b) => a > b ? a : b);
 
-    // Hitung maxY dan interval dinamis dengan headroom yang cukup agar bar tidak mentok atas
+    // Hitung maxY dan interval dinamis dengan rentang standar rumah tangga (0 - 5.0 kWh)
     final double maxY;
     final double interval;
-    if (isEmpty || maxVal <= 0.0) {
-      maxY = 1.0;
-      interval = 0.2;
-    } else if (maxVal <= 0.005) {
-      maxY = 0.008;
-      interval = 0.002;
-    } else if (maxVal <= 0.01) {
-      maxY = 0.016;
-      interval = 0.004;
-    } else if (maxVal <= 0.02) {
-      maxY = 0.030;
-      interval = 0.010;
-    } else if (maxVal <= 0.05) {
-      maxY = 0.080;
-      interval = 0.020;
-    } else if (maxVal <= 0.1) {
-      maxY = 0.150;
-      interval = 0.050;
-    } else if (maxVal <= 0.5) {
-      maxY = 0.8;
-      interval = 0.2;
-    } else if (maxVal <= 1.0) {
-      maxY = 1.5;
-      interval = 0.5;
-    } else if (maxVal <= 5.0) {
-      maxY = 8.0;
+    if (isEmpty || maxVal <= 5.0) {
+      maxY = 5.0;
+      interval = 1.0;
+    } else if (maxVal <= 10.0) {
+      maxY = 10.0;
       interval = 2.0;
+    } else if (maxVal <= 20.0) {
+      maxY = 20.0;
+      interval = 5.0;
+    } else if (maxVal <= 50.0) {
+      maxY = 50.0;
+      interval = 10.0;
     } else {
-      maxY = ((maxVal * 1.3 / 2).ceil() * 2).toDouble();
-      interval = (maxY / 4).ceilToDouble();
+      maxY = ((maxVal * 1.25 / 5).ceil() * 5).toDouble();
+      interval = (maxY / 5).ceilToDouble();
     }
 
     final canGoForward = !_isCurrentWeek;
