@@ -93,15 +93,21 @@ class AuthService {
       return existingUser;
     }
 
-    // 2. Beri waktu Firebase Auth memulihkan sesi dari penyimpanan lokal Android jika sedang cold start
+    // 2. Beri waktu Firebase Auth memulihkan sesi dari penyimpanan lokal Android jika sedang cold start.
+    // PENTING: auth.authStateChanges() memancarkan null terlebih dahulu pada cold start sebelum token selesai dibaca dari disk.
+    // Kita harus menunggu sampai ada event user != null atau timeout tercapai.
     try {
-      existingUser = await auth.authStateChanges().first.timeout(const Duration(milliseconds: 1500));
-      if (existingUser != null) {
-        debugPrint('AuthService: Sesi berhasil dipulihkan dari authStateChanges (UID: ${existingUser.uid})');
-        return existingUser;
+      final restoredUser = await auth
+          .authStateChanges()
+          .where((user) => user != null)
+          .first
+          .timeout(const Duration(milliseconds: 2500));
+      if (restoredUser != null) {
+        debugPrint('AuthService: Sesi berhasil dipulihkan dari authStateChanges (UID: ${restoredUser.uid})');
+        return restoredUser;
       }
     } catch (_) {
-      // Timeout atau authState belum memancarkan user, lanjutkan ke pembuatan baru jika auth.currentUser masih null
+      // Timeout tercapai: pengguna benar-benar baru pertama kali membuka aplikasi dan belum memiliki akun tersimpan
     }
 
     if (auth.currentUser != null) {

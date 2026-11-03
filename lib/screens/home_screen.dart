@@ -50,6 +50,7 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<SensorReading>? _sensorSubscription;
   StreamSubscription<List<double>>? _weeklySubscription;
   StreamSubscription<YearlyEnergyData>? _yearlySubscription;
+  StreamSubscription<AccessApprovalResult>? _accessSubscription;
   final NumberFormat _currencyFormatter = NumberFormat.currency(
     locale: 'id_ID',
     symbol: 'Rp ',
@@ -80,6 +81,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _sensorSubscription?.cancel();
     _weeklySubscription?.cancel();
     _yearlySubscription?.cancel();
+    _accessSubscription?.cancel();
     SensorStreamService.instance.stopStreaming();
     super.dispose();
   }
@@ -340,6 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (!explicitlyDisconnected) {
       // Auto-reconnect HANYA jika pengguna BELUM secara sengaja menekan 'Putuskan'
       final pairedId = await DeviceService.getPairedDeviceId();
+      // 1. Coba verifikasi cepat
       try {
         final approval = await AccessApprovalService.instance.verifyDeviceAccess(pairedId);
         if (approval.isGranted && mounted) {
@@ -350,8 +353,25 @@ class _HomeScreenState extends State<HomeScreen> {
             _isConnected = true;
             _isOwner = approval.isOwner;
           });
+          return;
         }
       } catch (_) {}
+
+      // 2. Jika verifikasi cepat tertunda oleh koneksi awal Firebase, dengarkan perubahan izin secara real-time
+      _accessSubscription?.cancel();
+      _accessSubscription = AccessApprovalService.instance.streamDeviceAccess(pairedId).listen((approval) async {
+        if (approval.isGranted && mounted) {
+          _accessSubscription?.cancel();
+          _accessSubscription = null;
+          await DeviceService.saveConnectionState(true);
+          await DeviceService.saveUserRole(approval.role);
+          SensorStreamService.instance.startStreaming();
+          setState(() {
+            _isConnected = true;
+            _isOwner = approval.isOwner;
+          });
+        }
+      });
     }
   }
 
@@ -484,6 +504,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 await DeviceService.clearPairedDevice();
                 _weeklySubscription?.cancel();
                 _yearlySubscription?.cancel();
+                _accessSubscription?.cancel();
+                _accessSubscription = null;
                 SensorStreamService.instance.stopStreaming();
 
                 if (!mounted) return;
