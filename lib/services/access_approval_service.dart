@@ -144,6 +144,7 @@ class AccessApprovalService {
       if (statusStr == 'active') {
         // Izin aktif: perbarui state lokal dan arahkan stream aktif
         await DeviceService.savePairedDeviceId(cleanDeviceId);
+        await DeviceService.saveUserRole(roleStr);
         SensorStreamService.instance.setActiveDeviceId(cleanDeviceId);
         await DeviceService.saveConnectionState(true);
 
