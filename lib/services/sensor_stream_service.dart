@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import '../firebase_options.dart';
 import '../models/scheduled_tariff.dart';
 import '../models/sensor_reading.dart';
+import 'auth_service.dart';
 import 'device_service.dart';
 import 'live_status.dart';
 
@@ -199,10 +200,17 @@ class SensorStreamService {
   // FIREBASE LISTENER (mode nyata; tanpa fallback simulator)
   // -------------------------------------------------------------
 
-  void _listenToFirebase(FirebaseDatabase db) {
+  Future<void> _listenToFirebase(FirebaseDatabase db) async {
     _firebaseSub?.cancel();
     _controlSub?.cancel();
     streamError = null;
+
+    // Pastikan sesi autentikasi Firebase sudah terbit/aktif sebelum memulai listener RTDB
+    try {
+      await AuthService.instance.ensureAnonymousSession();
+    } catch (_) {}
+
+    if (!_isStreamingActive) return;
 
     try {
       final ref = db.ref(rtdbLivePath);
@@ -236,6 +244,19 @@ class SensorStreamService {
           _latest = null;
           streamError = 'Gagal membaca data perangkat: $error';
           _recompute();
+
+          // Jika terjadi permission-denied saat startup (misal token auth sedang diperbarui/diambil),
+          // ulangi koneksi secara otomatis setelah 2 detik agar tidak hang selamanya.
+          if (_isStreamingActive && error.toString().contains('permission-denied')) {
+            Future.delayed(const Duration(seconds: 2), () {
+              if (_isStreamingActive && _latest == null) {
+                final currentDb = _db;
+                if (currentDb != null) {
+                  _listenToFirebase(currentDb);
+                }
+              }
+            });
+          }
         },
       );
 

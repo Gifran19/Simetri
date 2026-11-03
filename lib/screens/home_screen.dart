@@ -7,6 +7,7 @@ import '../models/device_data.dart';
 import '../models/scheduled_tariff.dart';
 import '../models/sensor_reading.dart';
 import '../models/yearly_energy_data.dart';
+import '../services/access_approval_service.dart';
 import '../services/device_service.dart';
 import '../services/energy_database_service.dart';
 import '../services/live_status.dart';
@@ -319,6 +320,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (savedConnected) {
       SensorStreamService.instance.startStreaming();
+    } else {
+      // Auto-reconnect check: jika pengguna memiliki izin aktif di cloud (misal role Member/Owner),
+      // hubungkan secara otomatis tanpa memaksa pengguna mengetik ID perangkat kembali.
+      final pairedId = await DeviceService.getPairedDeviceId();
+      try {
+        final approval = await AccessApprovalService.instance.verifyDeviceAccess(pairedId);
+        if (approval.isGranted && mounted) {
+          await DeviceService.saveConnectionState(true);
+          SensorStreamService.instance.startStreaming();
+          setState(() {
+            _isConnected = true;
+          });
+        }
+      } catch (_) {}
     }
   }
 
