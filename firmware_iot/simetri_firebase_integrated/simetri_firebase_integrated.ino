@@ -1832,6 +1832,39 @@ bool muatRiwayatBulananDariCloud() {
       energyPrefs.putFloat(kE, energiBulanCached[m]);
     }
     Serial.println("[HISTORI] Riwayat energi bulanan tahunan tersinkronisasi dari RTDB.");
+
+    // Muat juga riwayat hari ini dari Firebase agar saat restart / upload ulang,
+    // pemakaian hari ini tidak ter-reset menjadi 0!
+    if (strlen(kalenderTanggalStr) > 0) {
+      String urlToday = "https://" + String(FIREBASE_HOST) + "/energy_data/" + String(DEVICE_ID) + "/" + String(kalenderTahun) + "/daily_history/" + String(kalenderTanggalStr) + ".json?auth=" + firebaseIdToken;
+#if USE_FIREBASE_EMULATOR
+      urlToday = "http://" + String(EMULATOR_HOST) + ":" + String(EMULATOR_RTDB_PORT) + "/energy_data/" + String(DEVICE_ID) + "/" + String(kalenderTahun) + "/daily_history/" + String(kalenderTanggalStr) + ".json?ns=" + String(FIREBASE_RTDB_NAMESPACE) + "&auth=" + firebaseIdToken;
+      if (http.begin(plainClient, urlToday)) {
+#else
+      if (http.begin(secureClient, urlToday)) {
+#endif
+        int codeToday = http.GET();
+        if (codeToday == 200) {
+          String respToday = http.getString();
+          DynamicJsonDocument docToday(256);
+          if (deserializeJson(docToday, respToday) == DeserializationError::Ok) {
+            float savedTodayKwh = docToday["energy_kwh"].as<float>();
+            if (!isnan(savedTodayKwh) && savedTodayKwh > energiHari) {
+              energiHari = savedTodayKwh;
+              if (!isnan(energyKwh) && energyKwh >= savedTodayKwh) {
+                energyAwalHari = energyKwh - savedTodayKwh;
+              } else if (!isnan(energyKwh)) {
+                energyAwalHari = 0.0f;
+              }
+              energyPrefs.putFloat("e_start_day", energyAwalHari);
+              Serial.printf("[HISTORI] Restore pemakaian hari ini dari Firebase: %.3f kWh (Awal hari: %.4f kWh)\n", energiHari, energyAwalHari);
+            }
+          }
+        }
+        http.end();
+      }
+    }
+
     return true;
   }
   http.end();
