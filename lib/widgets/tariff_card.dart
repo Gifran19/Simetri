@@ -21,6 +21,7 @@ class TariffCard extends StatelessWidget {
   final double? appliedTariff;
   final ScheduledTariff? scheduledTariff;
   final VoidCallback? onCancelScheduled;
+  final bool isOwner;
 
   const TariffCard({
     super.key,
@@ -31,6 +32,7 @@ class TariffCard extends StatelessWidget {
     this.appliedTariff,
     this.scheduledTariff,
     this.onCancelScheduled,
+    this.isOwner = true,
   });
 
   @override
@@ -166,7 +168,7 @@ class TariffCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (onCancelScheduled != null)
+                  if (onCancelScheduled != null && isOwner)
                     InkWell(
                       onTap: onCancelScheduled,
                       borderRadius: BorderRadius.circular(6),
@@ -189,45 +191,71 @@ class TariffCard extends StatelessWidget {
 
           Row(
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () {
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (context) {
-                        return UpdateTariffSheet(
-                          currentTariff: tariff,
-                          onSave: (newTariff, effectiveDate, dateLabel, note) {
-                            onTariffChanged(newTariff, effectiveDate, dateLabel, note);
-                          },
-                        );
-                      },
-                    );
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
-                  ),
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.edit_outlined, size: 16),
-                      SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          'Ubah Tarif',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              if (isOwner)
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (context) {
+                          return UpdateTariffSheet(
+                            currentTariff: tariff,
+                            onSave: (newTariff, effectiveDate, dateLabel, note) {
+                              onTariffChanged(newTariff, effectiveDate, dateLabel, note);
+                            },
+                          );
+                        },
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.edit_outlined, size: 16),
+                        SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Ubah Tarif',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.04),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white10),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.lock_outline_rounded, size: 14, color: Colors.white38),
+                        SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Tarif (Khusus Owner)',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: Colors.white38, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton(

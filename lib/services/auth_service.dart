@@ -58,14 +58,27 @@ class AuthService {
   /// Apakah pengguna sudah memiliki sesi login aktif
   bool get isLoggedIn => currentUser != null;
 
+  Future<User?>? _inFlightSession;
+
   // ----------------------------------------------------
   // SESI ANONIM OTOMATIS (PERSISTEN)
   // ----------------------------------------------------
   /// Memastikan sesi pengguna aktif tanpa memaksa pendaftaran/login akun manual.
   /// - Jika sudah ada sesi aktif sebelumnya, sesi tersebut dipulihkan (UID TIDAK BERUBAH).
-  /// - Jika belum ada sesi, melakukan signInAnonymously() secara otomatis.
-  /// - Kegagalan koneksi/Firebase akan dilempar sebagai exception, tidak memberikan status sukses palsu.
+  /// - Menghindari race condition dan tidak membuat UID baru jika sesi sedang dimuat dari disk.
   Future<User?> ensureAnonymousSession() async {
+    if (_inFlightSession != null) {
+      return _inFlightSession;
+    }
+    _inFlightSession = _resolveAnonymousSession();
+    try {
+      return await _inFlightSession;
+    } finally {
+      _inFlightSession = null;
+    }
+  }
+
+  Future<User?> _resolveAnonymousSession() async {
     final auth = _auth;
     if (auth == null) {
       throw const AuthException(
@@ -73,14 +86,29 @@ class AuthService {
       );
     }
 
-    // 1. Cek sesi lokal yang sudah tersimpan
-    final existingUser = auth.currentUser;
+    // 1. Cek sesi lokal yang sudah tersimpan di memory
+    var existingUser = auth.currentUser;
     if (existingUser != null) {
       debugPrint('AuthService: Memulihkan sesi pengguna yang sudah ada (UID: ${existingUser.uid})');
       return existingUser;
     }
 
-    // 2. Jika belum ada sesi, buat sesi anonim baru
+    // 2. Beri waktu Firebase Auth memulihkan sesi dari penyimpanan lokal Android jika sedang cold start
+    try {
+      existingUser = await auth.authStateChanges().first.timeout(const Duration(milliseconds: 1500));
+      if (existingUser != null) {
+        debugPrint('AuthService: Sesi berhasil dipulihkan dari authStateChanges (UID: ${existingUser.uid})');
+        return existingUser;
+      }
+    } catch (_) {
+      // Timeout atau authState belum memancarkan user, lanjutkan ke pembuatan baru jika auth.currentUser masih null
+    }
+
+    if (auth.currentUser != null) {
+      return auth.currentUser;
+    }
+
+    // 3. Jika benar-benar belum ada sesi yang tersimpan, baru buat sesi anonim baru
     try {
       debugPrint('AuthService: Memulai signInAnonymously() baru...');
       final credential = await auth.signInAnonymously();

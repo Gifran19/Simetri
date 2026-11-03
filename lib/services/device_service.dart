@@ -31,6 +31,8 @@ class DeviceService {
   static const String _keyDeviceId = 'simetri_paired_device_id';
   static const String _keyTariff = 'simetri_current_tariff';
   static const String _keyTariffDate = 'simetri_tariff_active_date';
+  static const String _keyExplicitlyDisconnected = 'simetri_explicitly_disconnected';
+  static const String _keySavedRole = 'simetri_saved_role';
   static const String defaultDeviceId = 'SIMETRI_ESP32_001';
 
   // =========================
@@ -212,6 +214,7 @@ class DeviceService {
     if (cleanId.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyDeviceId, cleanId);
+    await prefs.setBool(_keyExplicitlyDisconnected, false);
     deviceIdNotifier.value = cleanId;
   }
 
@@ -219,8 +222,31 @@ class DeviceService {
   static Future<void> clearPairedDevice() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyDeviceId);
+    await prefs.setBool(_keyExplicitlyDisconnected, true);
     await saveConnectionState(false);
     deviceIdNotifier.value = defaultDeviceId;
+  }
+
+  /// Cek apakah pengguna sengaja memutuskan perangkat (sehingga tidak auto-reconnect)
+  static Future<bool> isExplicitlyDisconnected() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyExplicitlyDisconnected) ?? false;
+  }
+
+  static Future<void> setExplicitlyDisconnected(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyExplicitlyDisconnected, value);
+  }
+
+  /// Simpan & ambil role pengguna yang terverifikasi (owner / member)
+  static Future<void> saveUserRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keySavedRole, role);
+  }
+
+  static Future<String> getUserRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keySavedRole) ?? 'member';
   }
 
   /// Cek apakah pengguna sebelumnya sudah pernah menghubungkan perangkat
@@ -297,6 +323,7 @@ class DeviceService {
   // =========================
 
   Future<DeviceData> connectDevice({int powerLimitVa = 1300, double monthlyBudgetRp = 300000}) async {
+    await setExplicitlyDisconnected(false);
     await saveConnectionState(true);
 
     return getDeviceData(

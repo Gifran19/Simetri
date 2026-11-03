@@ -8,6 +8,8 @@ class DailyEnergyChart extends StatefulWidget {
   final bool isConnected;
   final String? deviceId;
   final DateTime? initialDate;
+  final double? liveTodayEnergy;
+  final double? liveTodayCost;
 
   const DailyEnergyChart({
     super.key,
@@ -15,6 +17,8 @@ class DailyEnergyChart extends StatefulWidget {
     this.isConnected = true,
     this.deviceId,
     this.initialDate,
+    this.liveTodayEnergy,
+    this.liveTodayCost,
   });
 
   @override
@@ -163,18 +167,38 @@ class _DailyEnergyChartState extends State<DailyEnergyChart> {
     final now = DateTime.now();
 
     // Tentukan data energi dan biaya yang akan digambar
-    final List<double> chartData;
-    final List<double> costs;
+    final List<double> rawChartData;
+    final List<double> rawCosts;
 
     if (_historyResult != null && !_historyResult!.isEmpty) {
-      chartData = _historyResult!.energy;
-      costs = _historyResult!.costs;
+      rawChartData = _historyResult!.energy;
+      rawCosts = _historyResult!.costs;
     } else if (_isCurrentWeek && widget.data != null && widget.data!.isNotEmpty) {
-      chartData = widget.data!;
-      costs = _historyResult?.costs ?? List.filled(7, 0.0);
+      rawChartData = widget.data!;
+      rawCosts = _historyResult?.costs ?? List.filled(7, 0.0);
     } else {
-      chartData = _historyResult?.energy ?? widget.data ?? List.filled(7, 0.0);
-      costs = _historyResult?.costs ?? List.filled(7, 0.0);
+      rawChartData = _historyResult?.energy ?? widget.data ?? List.filled(7, 0.0);
+      rawCosts = _historyResult?.costs ?? List.filled(7, 0.0);
+    }
+
+    final List<double> chartData = List<double>.from(rawChartData);
+    final List<double> costs = List<double>.from(rawCosts);
+
+    // Sinkronisasi data hari ini (real-time) dengan telemetri live di kartu atas
+    if (_isCurrentWeek && widget.isConnected) {
+      final todayIdx = now.weekday - 1; // 0=Sen, 1=Sel, dst.
+      if (todayIdx >= 0 && todayIdx < chartData.length) {
+        if (widget.liveTodayEnergy != null && widget.liveTodayEnergy! > 0) {
+          if (widget.liveTodayEnergy! > chartData[todayIdx]) {
+            chartData[todayIdx] = widget.liveTodayEnergy!;
+          }
+        }
+        if (widget.liveTodayCost != null && widget.liveTodayCost! > 0) {
+          if (widget.liveTodayCost! > costs[todayIdx]) {
+            costs[todayIdx] = widget.liveTodayCost!;
+          }
+        }
+      }
     }
 
     final bool isEmpty = chartData.isEmpty || chartData.every((e) => e <= 0.00001);

@@ -38,6 +38,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _isConnected = false;
+  bool _isOwner = false;
   DeviceData _device = DeviceData.disconnected();
 
   // Status kontrol relay & konfirmasi telemetri
@@ -297,6 +298,8 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Memuat status koneksi yang tersimpan sebelumnya
   Future<void> _loadSavedConnectionState() async {
     final savedConnected = await DeviceService.isDeviceConnected();
+    final explicitlyDisconnected = await DeviceService.isExplicitlyDisconnected();
+    final savedRole = await DeviceService.getUserRole();
     final powerLimit = await DeviceService.getPowerLimit();
     final budget = await DeviceService.getMonthlyBudget();
 
@@ -307,6 +310,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _isConnected = savedConnected;
+      _isOwner = savedRole.toLowerCase() == 'owner';
       _device = DeviceService.getDeviceData(
         isConnected: savedConnected,
         powerLimitVa: powerLimit,
@@ -320,17 +324,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (savedConnected) {
       SensorStreamService.instance.startStreaming();
-    } else {
-      // Auto-reconnect check: jika pengguna memiliki izin aktif di cloud (misal role Member/Owner),
-      // hubungkan secara otomatis tanpa memaksa pengguna mengetik ID perangkat kembali.
+      // Verifikasi ulang role di latar belakang agar selalu sinkron
+      final pairedId = await DeviceService.getPairedDeviceId();
+      AccessApprovalService.instance.verifyDeviceAccess(pairedId).then((approval) {
+        if (approval.isGranted && mounted) {
+          final isOwner = approval.isOwner;
+          DeviceService.saveUserRole(approval.role);
+          if (_isOwner != isOwner) {
+            setState(() {
+              _isOwner = isOwner;
+            });
+          }
+        }
+      }).catchError((_) {});
+    } else if (!explicitlyDisconnected) {
+      // Auto-reconnect HANYA jika pengguna BELUM secara sengaja menekan 'Putuskan'
       final pairedId = await DeviceService.getPairedDeviceId();
       try {
         final approval = await AccessApprovalService.instance.verifyDeviceAccess(pairedId);
         if (approval.isGranted && mounted) {
           await DeviceService.saveConnectionState(true);
+          await DeviceService.saveUserRole(approval.role);
           SensorStreamService.instance.startStreaming();
           setState(() {
             _isConnected = true;
+            _isOwner = approval.isOwner;
           });
         }
       } catch (_) {}
@@ -347,7 +365,20 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) {
         return ConnectDeviceSheet(
           onConnected: (connectedData) async {
+            await DeviceService.setExplicitlyDisconnected(false);
             await DeviceService.saveConnectionState(true);
+            final pairedId = await DeviceService.getPairedDeviceId();
+            try {
+              final approval = await AccessApprovalService.instance.verifyDeviceAccess(pairedId);
+              if (approval.isGranted) {
+                await DeviceService.saveUserRole(approval.role);
+                if (mounted) {
+                  setState(() {
+                    _isOwner = approval.isOwner;
+                  });
+                }
+              }
+            } catch (_) {}
             final powerLimit = await DeviceService.getPowerLimit();
             final budget = await DeviceService.getMonthlyBudget();
 
@@ -458,6 +489,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (!mounted) return;
                 setState(() {
                   _isConnected = false;
+                  _isOwner = false;
                   _device = DeviceData.disconnected();
                 });
 
@@ -555,6 +587,10 @@ class _HomeScreenState extends State<HomeScreen> {
     String date,
     String note,
   ) async {
+    if (!_isOwner) {
+      _showNotification('Hanya Owner perangkat yang berhak mengubah tarif listrik.', isWarning: true);
+      return;
+    }
     final result = await DeviceService.updateTariffAsync(
       value,
       date,
@@ -604,6 +640,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleCancelScheduledTariff() async {
+    if (!_isOwner) {
+      _showNotification('Hanya Owner perangkat yang berhak membatalkan jadwal tarif.', isWarning: true);
+      return;
+    }
     final success = await SensorStreamService.instance.cancelScheduledTariff();
     if (!mounted) return;
     if (success) {
@@ -612,6 +652,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openPowerLimitPicker() async {
+    if (!_isOwner) {
+      _showNotification('Hanya Owner perangkat yang berhak mengubah batas kapasitas daya.', isWarning: true);
+      return;
+    }
     const capacities = [450, 900, 1300, 2200, 3500, 4400, 5500, 7700];
 
     final selected = await showModalBottomSheet<int>(
@@ -1010,6 +1054,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       scheduledTariff: scheduledTariff,
                       onTariffChanged: _handleTariffChanged,
                       onCancelScheduled: _handleCancelScheduledTariff,
+                      isOwner: _isOwner,
                     );
                   },
                 );
@@ -1056,6 +1101,8 @@ class _HomeScreenState extends State<HomeScreen> {
           data: _isConnected ? _device.dailyHistory : const [],
           isConnected: _isConnected,
           deviceId: DeviceService.deviceIdNotifier.value,
+          liveTodayEnergy: _isConnected ? _device.dailyEnergy : null,
+          liveTodayCost: _isConnected ? _device.dailyCost : null,
         ),
         const SizedBox(height: 18),
 
@@ -1136,6 +1183,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 scheduledTariff: scheduledTariff,
                                 onTariffChanged: _handleTariffChanged,
                                 onCancelScheduled: _handleCancelScheduledTariff,
+                                isOwner: _isOwner,
                               );
                             },
                           );
@@ -1188,6 +1236,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     data: _isConnected ? _device.dailyHistory : const [],
                     isConnected: _isConnected,
                     deviceId: DeviceService.deviceIdNotifier.value,
+                    liveTodayEnergy: _isConnected ? _device.dailyEnergy : null,
+                    liveTodayCost: _isConnected ? _device.dailyCost : null,
                   ),
                   const SizedBox(height: 16),
 
