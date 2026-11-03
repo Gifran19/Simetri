@@ -821,11 +821,12 @@ void tampilHari() {
 
 void tampilBulan() {
   lcd.setCursor(0, 0);
-  snprintf(lcdBuf, sizeof(lcdBuf), "Bln:%.3fkWh       ", energiBulan);
+  float monthKwh = max(energiBulan, (kalenderBulan >= 0 && kalenderBulan < 12) ? energiBulanCached[kalenderBulan] : 0.0f);
+  snprintf(lcdBuf, sizeof(lcdBuf), "Bln:%.3fkWh       ", monthKwh);
   lcd.print(lcdBuf);
 
   lcd.setCursor(0, 1);
-  long biaya = (long)roundf(energiBulan * tarifPerKwh);
+  long biaya = (long)roundf(monthKwh * tarifPerKwh);
   snprintf(lcdBuf, sizeof(lcdBuf), "Biaya: Rp%ld       ", biaya);
   lcd.print(lcdBuf);
 }
