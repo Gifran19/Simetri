@@ -99,7 +99,7 @@ class AccessApprovalService {
   /// Mengambil UID sesi anonim saat ini.
   Future<String?> getCurrentAnonymousUid() async {
     final user = await AuthService.instance.ensureAnonymousSession();
-    return user?.uid;
+    return user?.uid ?? await AuthService.instance.getPersistentUid();
   }
 
   /// Memeriksa izin akses perangkat pada path: permissions/$uid/$deviceId.

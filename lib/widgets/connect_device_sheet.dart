@@ -54,15 +54,18 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
 
     try {
       final user = await AuthService.instance.ensureAnonymousSession();
-      if (mounted && user != null) {
+      final persistentUid = await AuthService.instance.getPersistentUid();
+      final displayUid = user?.uid ?? persistentUid;
+      if (mounted && displayUid != null && displayUid.isNotEmpty) {
         setState(() {
-          _userAnonymousUid = user.uid;
+          _userAnonymousUid = displayUid;
         });
       }
     } catch (_) {
+      final persistentUid = await AuthService.instance.getPersistentUid();
       if (mounted) {
         setState(() {
-          _userAnonymousUid = 'Sesi Lokal / Belum Login';
+          _userAnonymousUid = persistentUid ?? 'Sesi Lokal / Belum Login';
         });
       }
     }

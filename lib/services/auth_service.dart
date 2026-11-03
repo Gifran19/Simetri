@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'device_service.dart';
 import 'sensor_stream_service.dart';
@@ -78,6 +79,21 @@ class AuthService {
     }
   }
 
+  static const String _keyHasAnonymousSession = 'simetri_has_anonymous_session';
+  static const String _keyPersistentUid = 'simetri_persistent_uid';
+
+  /// Mengambil UID tersimpan secara persisten bahkan saat Firebase Auth sedang offline/handshake
+  Future<String?> getPersistentUid() async {
+    final direct = currentUid;
+    if (direct != null && direct.isNotEmpty) return direct;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_keyPersistentUid);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<User?> _resolveAnonymousSession() async {
     final auth = _auth;
     if (auth == null) {
@@ -90,39 +106,57 @@ class AuthService {
     var existingUser = auth.currentUser;
     if (existingUser != null) {
       debugPrint('AuthService: Memulihkan sesi pengguna yang sudah ada (UID: ${existingUser.uid})');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_keyHasAnonymousSession, true);
+        await prefs.setString(_keyPersistentUid, existingUser.uid);
+      } catch (_) {}
       return existingUser;
     }
 
-    // 2. Beri waktu Firebase Auth memulihkan sesi dari penyimpanan lokal Android jika sedang cold start.
-    // PENTING: auth.authStateChanges() memancarkan null terlebih dahulu pada cold start sebelum token selesai dibaca dari disk.
-    // Kita harus menunggu sampai ada event user != null atau timeout tercapai.
-    try {
-      final restoredUser = await auth
-          .authStateChanges()
-          .where((user) => user != null)
-          .first
-          .timeout(const Duration(milliseconds: 2500));
-      if (restoredUser != null) {
-        debugPrint('AuthService: Sesi berhasil dipulihkan dari authStateChanges (UID: ${restoredUser.uid})');
-        return restoredUser;
+    final prefs = await SharedPreferences.getInstance();
+    final hasExistingSession = prefs.getBool(_keyHasAnonymousSession) ?? false;
+    final savedUid = prefs.getString(_keyPersistentUid);
+
+    // 2. Jika perangkat ini SUDAH PERNAH memiliki sesi anonim, tunggu Firebase Auth memulihkannya.
+    // DILARANG KERAS memanggil signInAnonymously() jika sesi sudah pernah dibuat,
+    // karena memanggil signInAnonymously() akan membuang akun lama dan men-generate UID baru!
+    if (hasExistingSession) {
+      try {
+        final restoredUser = await auth
+            .authStateChanges()
+            .where((user) => user != null)
+            .first
+            .timeout(const Duration(seconds: 8));
+        if (restoredUser != null) {
+          debugPrint('AuthService: Sesi berhasil dipulihkan dari authStateChanges (UID: ${restoredUser.uid})');
+          await prefs.setString(_keyPersistentUid, restoredUser.uid);
+          return restoredUser;
+        }
+      } catch (_) {
+        debugPrint('AuthService: Menunggu sesi pulih (UID terdaftar: $savedUid)...');
       }
-    } catch (_) {
-      // Timeout tercapai: pengguna benar-benar baru pertama kali membuka aplikasi dan belum memiliki akun tersimpan
+
+      if (auth.currentUser != null) {
+        return auth.currentUser;
+      }
+
+      // Jangan pernah overwrite akun yang sudah ada dengan signInAnonymously baru!
+      return null;
     }
 
-    if (auth.currentUser != null) {
-      return auth.currentUser;
-    }
-
-    // 3. Jika benar-benar belum ada sesi yang tersimpan, baru buat sesi anonim baru
+    // 3. HANYA jika perangkat ini BENAR-BENAR BARU PERTAMA KALI dipasang (fresh install),
+    // baru buat akun anonim untuk pertama kali.
     try {
-      debugPrint('AuthService: Memulai signInAnonymously() baru...');
+      debugPrint('AuthService: Akun baru pertama kali, memulai signInAnonymously()...');
       final credential = await auth.signInAnonymously();
       final newUser = credential.user;
       if (newUser == null) {
         throw const AuthException('Gagal mendapatkan identitas anonim dari Firebase.');
       }
-      debugPrint('AuthService: Sesi anonim berhasil dibuat (UID: ${newUser.uid})');
+      await prefs.setBool(_keyHasAnonymousSession, true);
+      await prefs.setString(_keyPersistentUid, newUser.uid);
+      debugPrint('AuthService: Sesi anonim pertama kali berhasil dibuat & dikunci (UID: ${newUser.uid})');
       return newUser;
     } on FirebaseAuthException catch (e) {
       debugPrint('AuthService.signInAnonymously error: ${e.code} - ${e.message}');
