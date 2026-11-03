@@ -333,6 +333,10 @@ class _MonitoringCardState extends State<MonitoringCard> {
         final circleDiameter = (itemWidth - 6).clamp(86.0, 130.0);
 
         final isReadingOk = _showsValues;
+        final limitVa = widget.powerLimitVa > 0 ? widget.powerLimitVa : 1300;
+        final maxPower = limitVa.toDouble();
+        const maxVoltage = 300.0;
+        final maxCurrent = (maxPower / 220.0).clamp(6.0, 32.0);
 
         return Column(
           children: [
@@ -349,7 +353,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: GaugeMeter(
-                      value: isReadingOk ? widget.voltage / 250 : 0.0,
+                      value: isReadingOk ? (widget.voltage / maxVoltage).clamp(0.0, 1.0) : 0.0,
                       valueText: isReadingOk
                           ? widget.voltage.toStringAsFixed(1)
                           : '--',
@@ -377,7 +381,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: GaugeMeter(
-                      value: isReadingOk ? widget.power / 100 : 0.0,
+                      value: isReadingOk ? (widget.power / maxPower).clamp(0.0, 1.0) : 0.0,
                       valueText: isReadingOk
                           ? widget.power.toStringAsFixed(1)
                           : '--',
@@ -405,7 +409,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
                     },
                     borderRadius: BorderRadius.circular(14),
                     child: GaugeMeter(
-                      value: isReadingOk ? widget.current / 5 : 0.0,
+                      value: isReadingOk ? (widget.current / maxCurrent).clamp(0.0, 1.0) : 0.0,
                       valueText: isReadingOk
                           ? widget.current.toStringAsFixed(2)
                           : '--',
@@ -475,12 +479,17 @@ class _MonitoringCardState extends State<MonitoringCard> {
             ? 'DEMO • Data simulasi, bukan dari perangkat'
             : (isLive ? 'Data nyata dari perangkat' : widget.status.description));
 
+    final limitVa = widget.powerLimitVa > 0 ? widget.powerLimitVa : 1300;
+    final maxPower = limitVa.toDouble();
+    const maxVoltage = 300.0;
+    final maxCurrent = (maxPower / 220.0).clamp(6.0, 32.0);
+
     switch (_selectedMetric) {
       case 0:
         title = 'Tegangan Listrik';
         valueText = isLive ? widget.voltage.toStringAsFixed(1) : '--';
         unit = 'Volt';
-        progress = isLive ? (widget.voltage / 250).clamp(0.0, 1.0) : 0.0;
+        progress = isLive ? (widget.voltage / maxVoltage).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00FFA3), Color(0xff00D9A6), Color(0xff00A896)];
         statusNote = note;
         icon = Icons.bolt_rounded;
@@ -489,7 +498,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
         title = 'Daya Aktif';
         valueText = isLive ? widget.power.toStringAsFixed(1) : '--';
         unit = 'Watt';
-        progress = isLive ? (widget.power / 100).clamp(0.0, 1.0) : 0.0;
+        progress = isLive ? (widget.power / maxPower).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xff00D2FF), Color(0xff008CFF), Color(0xff0052D4)];
         statusNote = note;
         icon = Icons.power_rounded;
@@ -499,7 +508,7 @@ class _MonitoringCardState extends State<MonitoringCard> {
         title = 'Kuat Arus';
         valueText = isLive ? widget.current.toStringAsFixed(2) : '--';
         unit = 'Ampere';
-        progress = isLive ? (widget.current / 5).clamp(0.0, 1.0) : 0.0;
+        progress = isLive ? (widget.current / maxCurrent).clamp(0.0, 1.0) : 0.0;
         colors = const [Color(0xffF9D423), Color(0xffB7FF00), Color(0xff70E000)];
         statusNote = note;
         icon = Icons.waves_rounded;

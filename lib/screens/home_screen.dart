@@ -114,8 +114,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
     dbService.fetchYearlyData(now.year).then((yearly) {
       if (mounted && (yearly.monthlyEnergy.any((v) => v > 0) || yearly.totalEnergy > 0)) {
+        final curMonthIdx = now.month - 1;
+        final curMonthEnergy = yearly.monthlyEnergy.length > curMonthIdx ? yearly.monthlyEnergy[curMonthIdx] : 0.0;
+        final curMonthCost = yearly.monthlyCost.length > curMonthIdx ? yearly.monthlyCost[curMonthIdx] : null;
+
         setState(() {
-          _device = _device.copyWith(monthlyEnergyHistory: yearly.monthlyEnergy);
+          _device = _device.copyWith(
+            monthlyEnergyHistory: yearly.monthlyEnergy,
+            monthlyCostHistory: yearly.monthlyCost,
+            monthlyEnergy: curMonthEnergy > _device.monthlyEnergy ? curMonthEnergy : _device.monthlyEnergy,
+            monthlyCost: (curMonthCost != null && curMonthCost > (_device.monthlyCost ?? 0)) ? curMonthCost : _device.monthlyCost,
+          );
         });
       }
     });
@@ -130,8 +139,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _yearlySubscription = dbService.streamYearlyData(now.year).listen((yearly) {
       if (mounted) {
+        final curMonthIdx = now.month - 1;
+        final curMonthEnergy = yearly.monthlyEnergy.length > curMonthIdx ? yearly.monthlyEnergy[curMonthIdx] : 0.0;
+        final curMonthCost = yearly.monthlyCost.length > curMonthIdx ? yearly.monthlyCost[curMonthIdx] : null;
+
         setState(() {
-          _device = _device.copyWith(monthlyEnergyHistory: yearly.monthlyEnergy);
+          _device = _device.copyWith(
+            monthlyEnergyHistory: yearly.monthlyEnergy,
+            monthlyCostHistory: yearly.monthlyCost,
+            monthlyEnergy: curMonthEnergy > _device.monthlyEnergy ? curMonthEnergy : _device.monthlyEnergy,
+            monthlyCost: (curMonthCost != null && curMonthCost > (_device.monthlyCost ?? 0)) ? curMonthCost : _device.monthlyCost,
+          );
         });
       }
     });
@@ -234,6 +252,23 @@ class _HomeScreenState extends State<HomeScreen> {
           monthlyCost = null;
         }
 
+        // Rekonsiliasi pemakaian bulanan:
+        // Gunakan akumulasi historis kalender bulanan jika lebih lengkap daripada pembacaan RAM sementara ESP32
+        final curMonthIdx = DateTime.now().month - 1;
+        final historyMonthlyEnergy = _device.monthlyEnergyHistory.length > curMonthIdx
+            ? _device.monthlyEnergyHistory[curMonthIdx]
+            : 0.0;
+        final historyMonthlyCost = _device.monthlyCostHistory.length > curMonthIdx
+            ? _device.monthlyCostHistory[curMonthIdx]
+            : null;
+
+        final effectiveMonthlyEnergy = historyMonthlyEnergy > reading.monthlyEnergyKwh
+            ? historyMonthlyEnergy
+            : reading.monthlyEnergyKwh;
+        final effectiveMonthlyCost = (historyMonthlyCost != null && historyMonthlyCost > (monthlyCost ?? 0.0))
+            ? historyMonthlyCost
+            : monthlyCost;
+
         setState(() {
           _device = _device.copyWith(
             voltage: reading.voltage,
@@ -244,9 +279,9 @@ class _HomeScreenState extends State<HomeScreen> {
             dailyEnergy: reading.dailyEnergyKwh,
             dailyCost: dailyCost,
             resetDailyCost: dailyCost == null,
-            monthlyEnergy: reading.monthlyEnergyKwh,
-            monthlyCost: monthlyCost,
-            resetMonthlyCost: monthlyCost == null,
+            monthlyEnergy: effectiveMonthlyEnergy,
+            monthlyCost: effectiveMonthlyCost,
+            resetMonthlyCost: effectiveMonthlyCost == null,
             isLiveStream: reading.isFromFirebase,
             streamSource: SensorStreamService.instance.sourceLabel,
             isSensorValid: reading.isValid,

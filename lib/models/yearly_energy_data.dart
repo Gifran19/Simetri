@@ -95,6 +95,45 @@ class YearlyEnergyData {
     // Parse monthly_cost (12 elemen, mendukung Map maupun List dari Firebase RTDB)
     final monthlyCost = _parseMonthlyList(data['monthly_cost']);
 
+    // Rekonsiliasi & agregasi dari daily_history jika tersedia.
+    // Ini menjamin seluruh pemakaian harian dalam bulan yang sama terakumulasi dengan benar,
+    // bahkan jika ESP32 sempat reboot/restart sehingga variabel RAM sementaranya kembali ke nol.
+    final rawDailyHistory = data['daily_history'];
+    if (rawDailyHistory is Map) {
+      final aggregatedEnergy = List<double>.filled(12, 0.0);
+      final aggregatedCost = List<double>.filled(12, 0.0);
+      final hasDaysInMonth = List<bool>.filled(12, false);
+
+      rawDailyHistory.forEach((dateKey, val) {
+        if (val is Map) {
+          final dateStr = dateKey.toString();
+          final parts = dateStr.split('-');
+          if (parts.length >= 2) {
+            final monthNum = int.tryParse(parts[1]);
+            if (monthNum != null && monthNum >= 1 && monthNum <= 12) {
+              final monthIdx = monthNum - 1;
+              final kwh = (val['energy_kwh'] as num?)?.toDouble() ?? 0.0;
+              final cost = (val['cost_rp'] as num?)?.toDouble() ?? 0.0;
+              aggregatedEnergy[monthIdx] += kwh;
+              aggregatedCost[monthIdx] += cost;
+              hasDaysInMonth[monthIdx] = true;
+            }
+          }
+        }
+      });
+
+      for (int m = 0; m < 12; m++) {
+        if (hasDaysInMonth[m]) {
+          if (aggregatedEnergy[m] > monthlyEnergy[m]) {
+            monthlyEnergy[m] = aggregatedEnergy[m];
+          }
+          if (aggregatedCost[m] > monthlyCost[m]) {
+            monthlyCost[m] = aggregatedCost[m];
+          }
+        }
+      }
+    }
+
     // Hitung summary dari data bulanan jika tidak tersedia di node summary
     final rawSummary = data['summary'];
     double? totalEnergyFromSummary;
@@ -115,10 +154,15 @@ class YearlyEnergyData {
       }
     }
 
-    final totalEnergy =
-        totalEnergyFromSummary ?? monthlyEnergy.fold<double>(0.0, (a, b) => a + b);
-    final totalCost =
-        totalCostFromSummary ?? monthlyCost.fold<double>(0.0, (a, b) => a + b);
+    final totalEnergyFromMonths = monthlyEnergy.fold<double>(0.0, (a, b) => a + b);
+    final totalCostFromMonths = monthlyCost.fold<double>(0.0, (a, b) => a + b);
+
+    final totalEnergy = totalEnergyFromSummary != null && totalEnergyFromSummary > totalEnergyFromMonths
+        ? totalEnergyFromSummary
+        : totalEnergyFromMonths;
+    final totalCost = totalCostFromSummary != null && totalCostFromSummary > totalCostFromMonths
+        ? totalCostFromSummary
+        : totalCostFromMonths;
     final avgEnergy = totalEnergy / 12;
 
     // Hitung persentase perubahan jika ada data tahun sebelumnya

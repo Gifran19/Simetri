@@ -1322,11 +1322,12 @@ bool kirimTelemetriCloud() {
   }
 
   float dailyCost = (float)roundf(energiHari * tarifPerKwh);
-  float monthlyCost = (float)roundf(energiBulan * tarifPerKwh);
+  float monthKwh = max(energiBulan, (kalenderBulan >= 0 && kalenderBulan < 12) ? energiBulanCached[kalenderBulan] : 0.0f);
+  float monthlyCost = (float)roundf(monthKwh * tarifPerKwh);
 
   doc["energy_kwh"] = isnan(energyKwh) ? (float)0.0 : energyKwh;
   doc["daily_energy"] = energiHari;
-  doc["monthly_energy"] = energiBulan;
+  doc["monthly_energy"] = monthKwh;
   doc["daily_cost"] = dailyCost;
   doc["monthly_cost"] = monthlyCost;
   doc["tariff_per_kwh"] = tarifPerKwh;
@@ -1813,8 +1814,11 @@ bool muatRiwayatBulananDariCloud() {
       if (doc.is<JsonObject>()) {
         for (JsonPair kv : doc.as<JsonObject>()) {
           int m = atoi(kv.key().c_str());
-          if (m >= 0 && m < 12 && m != kalenderBulan) {
-            energiBulanCached[m] = kv.value().as<float>();
+          if (m >= 0 && m < 12) {
+            float valKwh = kv.value().as<float>();
+            if (valKwh > energiBulanCached[m]) {
+              energiBulanCached[m] = valKwh;
+            }
           }
         }
       }
@@ -1870,10 +1874,13 @@ bool kirimHistoriCloud() {
   http.addHeader("Content-Type", "application/json");
 
   float dailyCost   = (float)roundf(energiHari * tarifPerKwh);
-  float monthlyCost = (float)roundf(energiBulan * tarifPerKwh);
+  float monthKwh    = max(energiBulan, (kalenderBulan >= 0 && kalenderBulan < 12) ? energiBulanCached[kalenderBulan] : 0.0f);
+  float monthlyCost = (float)roundf(monthKwh * tarifPerKwh);
 
-  energiBulanCached[kalenderBulan] = energiBulan;
-  biayaBulanCached[kalenderBulan]  = monthlyCost;
+  if (kalenderBulan >= 0 && kalenderBulan < 12) {
+    energiBulanCached[kalenderBulan] = monthKwh;
+    biayaBulanCached[kalenderBulan]  = monthlyCost;
+  }
 
   // Summary tahunan: hitung seluruh bulan yang tersedia di tahun berjalan
   float totalTahunEnergi = 0.0f;
@@ -1917,7 +1924,7 @@ bool kirimHistoriCloud() {
 
   // C. Ringkasan Bulanan (Januari=0 .. Desember=11)
   snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_energy/%d", kalenderTahun, kalenderBulan);
-  doc[keyBuf] = energiBulan;
+  doc[keyBuf] = monthKwh;
   snprintf(keyBuf, sizeof(keyBuf), "%d/monthly_cost/%d", kalenderTahun, kalenderBulan);
   doc[keyBuf] = monthlyCost;
 
