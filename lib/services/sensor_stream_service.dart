@@ -245,11 +245,14 @@ class SensorStreamService {
           streamError = 'Gagal membaca data perangkat: $error';
           _recompute();
 
-          // Jika terjadi permission-denied saat startup (misal token auth sedang diperbarui/diambil),
-          // ulangi koneksi secara otomatis setelah 2 detik agar tidak hang selamanya.
+          // Jika terjadi permission-denied saat startup (misal token auth kadaluarsa),
+          // paksa refresh token dan hubungkan ulang listener secara otomatis setelah 2 detik
           if (_isStreamingActive && error.toString().contains('permission-denied')) {
-            Future.delayed(const Duration(seconds: 2), () {
+            Future.delayed(const Duration(seconds: 2), () async {
               if (_isStreamingActive && _latest == null) {
+                try {
+                  await AuthService.instance.ensureAnonymousSession(forceRefresh: true);
+                } catch (_) {}
                 final currentDb = _db;
                 if (currentDb != null) {
                   _listenToFirebase(currentDb);

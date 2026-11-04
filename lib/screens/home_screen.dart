@@ -8,6 +8,7 @@ import '../models/scheduled_tariff.dart';
 import '../models/sensor_reading.dart';
 import '../models/yearly_energy_data.dart';
 import '../services/access_approval_service.dart';
+import '../services/auth_service.dart';
 import '../services/device_service.dart';
 import '../services/energy_database_service.dart';
 import '../services/live_status.dart';
@@ -310,18 +311,36 @@ class _HomeScreenState extends State<HomeScreen> {
     final prevMonthlyEnergy = _device.monthlyEnergyHistory;
     final prevMonthlyCost = _device.monthlyCostHistory;
 
+    final latest = SensorStreamService.instance.latestReading;
+    final defaultDev = DeviceService.getDeviceData(
+      isConnected: savedConnected,
+      powerLimitVa: powerLimit,
+      monthlyBudgetRp: budget,
+    );
+
     setState(() {
       _isConnected = savedConnected;
       _isOwner = savedRole.toLowerCase() == 'owner';
-      _device = DeviceService.getDeviceData(
-        isConnected: savedConnected,
-        powerLimitVa: powerLimit,
-        monthlyBudgetRp: budget,
-      ).copyWith(
-        dailyHistory: prevDaily,
-        monthlyEnergyHistory: prevMonthlyEnergy,
-        monthlyCostHistory: prevMonthlyCost,
-      );
+      _device = (latest != null && savedConnected)
+          ? defaultDev.copyWith(
+              voltage: latest.voltage,
+              current: latest.current,
+              power: latest.power,
+              frequency: latest.frequency,
+              powerFactor: latest.powerFactor,
+              dailyEnergy: latest.dailyEnergyKwh,
+              dailyCost: latest.dailyCost,
+              monthlyEnergy: latest.monthlyEnergyKwh,
+              monthlyCost: latest.monthlyCost,
+              dailyHistory: prevDaily,
+              monthlyEnergyHistory: prevMonthlyEnergy,
+              monthlyCostHistory: prevMonthlyCost,
+            )
+          : defaultDev.copyWith(
+              dailyHistory: prevDaily,
+              monthlyEnergyHistory: prevMonthlyEnergy,
+              monthlyCostHistory: prevMonthlyCost,
+            );
     });
 
     if (savedConnected) {
@@ -983,6 +1002,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   _status.badge,
                   style: TextStyle(
                     color: badgeColor,
+             
+             
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),
@@ -1003,6 +1024,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _handleRefresh() async {
+    try {
+      await AuthService.instance.ensureAnonymousSession(forceRefresh: true);
+      final pairedId = await DeviceService.getPairedDeviceId();
+      final approval = await AccessApprovalService.instance.verifyDeviceAccess(pairedId, forceRefresh: true);
+      if (approval.isGranted && mounted) {
+        await DeviceService.saveUserRole(approval.role);
+        setState(() {
+          _isOwner = approval.isOwner;
+        });
+      }
+      SensorStreamService.instance.stopStreaming();
+      SensorStreamService.instance.startStreaming();
+      _initHistoryStreams();
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1011,16 +1049,21 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 840),
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  if (constraints.maxWidth >= 600) {
-                    return _buildTabletLayout();
-                  }
-                  return _buildMobileLayout();
-                },
+            child: RefreshIndicator(
+              color: const Color(0xff00D9A6),
+              backgroundColor: const Color(0xff0D1F3C),
+              onRefresh: _handleRefresh,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    if (constraints.maxWidth >= 600) {
+                      return _buildTabletLayout();
+                    }
+                    return _buildMobileLayout();
+                  },
+                ),
               ),
             ),
           ),

@@ -97,14 +97,14 @@ class AccessApprovalService {
   AccessApprovalService._internal();
 
   /// Mengambil UID sesi anonim saat ini.
-  Future<String?> getCurrentAnonymousUid() async {
-    final user = await AuthService.instance.ensureAnonymousSession();
+  Future<String?> getCurrentAnonymousUid({bool forceRefresh = false}) async {
+    final user = await AuthService.instance.ensureAnonymousSession(forceRefresh: forceRefresh);
     return user?.uid ?? await AuthService.instance.getPersistentUid();
   }
 
   /// Memeriksa izin akses perangkat pada path: permissions/$uid/$deviceId.
   /// Aplikasi HANYA menyatakan terhubung jika status bernilai 'active'.
-  Future<AccessApprovalResult> verifyDeviceAccess(String targetDeviceId) async {
+  Future<AccessApprovalResult> verifyDeviceAccess(String targetDeviceId, {bool forceRefresh = false}) async {
     final cleanDeviceId = targetDeviceId.trim();
     if (cleanDeviceId.isEmpty) {
       return const AccessApprovalResult(
@@ -114,7 +114,7 @@ class AccessApprovalService {
       );
     }
 
-    final uid = await getCurrentAnonymousUid();
+    final uid = await getCurrentAnonymousUid(forceRefresh: forceRefresh);
     if (uid == null || uid.isEmpty) {
       return AccessApprovalResult(
         status: AccessStatus.error,
@@ -177,6 +177,10 @@ class AccessApprovalService {
       }
     } catch (e) {
       debugPrint('AccessApprovalService check error: $e');
+      if (!forceRefresh && e.toString().contains('permission-denied')) {
+        debugPrint('verifyDeviceAccess: token kedaluwarsa terdeteksi, me-refresh token...');
+        return verifyDeviceAccess(cleanDeviceId, forceRefresh: true);
+      }
       return AccessApprovalResult(
         status: AccessStatus.error,
         deviceId: cleanDeviceId,

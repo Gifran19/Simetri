@@ -67,13 +67,26 @@ class AuthService {
   /// Memastikan sesi pengguna aktif tanpa memaksa pendaftaran/login akun manual.
   /// - Jika sudah ada sesi aktif sebelumnya, sesi tersebut dipulihkan (UID TIDAK BERUBAH).
   /// - Menghindari race condition dan tidak membuat UID baru jika sesi sedang dimuat dari disk.
-  Future<User?> ensureAnonymousSession() async {
+  /// - Secara otomatis me-refresh token jika token kadaluarsa (misal setelah app ditinggal semalaman).
+  Future<User?> ensureAnonymousSession({bool forceRefresh = false}) async {
     if (_inFlightSession != null) {
-      return _inFlightSession;
+      final user = await _inFlightSession;
+      if (user != null && forceRefresh) {
+        try {
+          await user.getIdToken(true);
+        } catch (_) {}
+      }
+      return user;
     }
     _inFlightSession = _resolveAnonymousSession();
     try {
-      return await _inFlightSession;
+      final user = await _inFlightSession;
+      if (user != null) {
+        try {
+          await user.getIdToken(forceRefresh);
+        } catch (_) {}
+      }
+      return user;
     } finally {
       _inFlightSession = null;
     }
@@ -113,13 +126,13 @@ class AuthService {
     }
 
     // 2. Beri waktu Firebase Auth memulihkan sesi dari penyimpanan lokal Android jika sedang cold start.
-    // authStateChanges() di Android butuh sesaat membaca token dari disk.
+    // authStateChanges() di Android butuh sesaat membaca & mendekripsi token dari disk.
     try {
       final restoredUser = await auth
           .authStateChanges()
           .where((user) => user != null)
           .first
-          .timeout(const Duration(seconds: 4));
+          .timeout(const Duration(seconds: 6));
       if (restoredUser != null) {
         debugPrint('AuthService: Sesi berhasil dipulihkan dari authStateChanges (UID: ${restoredUser.uid})');
         try {
