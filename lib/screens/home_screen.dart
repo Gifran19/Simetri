@@ -345,7 +345,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (savedConnected) {
       SensorStreamService.instance.startStreaming();
-      // Verifikasi ulang role di latar belakang agar selalu sinkron
+      // Verifikasi ulang izin dan role di latar belakang agar selalu sinkron
       final pairedId = await DeviceService.getPairedDeviceId();
       AccessApprovalService.instance.verifyDeviceAccess(pairedId).then((approval) {
         if (approval.isGranted && mounted) {
@@ -356,6 +356,13 @@ class _HomeScreenState extends State<HomeScreen> {
               _isOwner = isOwner;
             });
           }
+        } else if (!approval.isGranted && mounted) {
+          // Jika izin belum diberikan atau telah dicabut, batalkan status terhubung
+          SensorStreamService.instance.stopStreaming();
+          DeviceService.saveConnectionState(false);
+          setState(() {
+            _isConnected = false;
+          });
         }
       }).catchError((_) {});
     } else if (!explicitlyDisconnected) {

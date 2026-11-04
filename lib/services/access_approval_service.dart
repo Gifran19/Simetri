@@ -96,10 +96,10 @@ class AccessApprovalService {
   factory AccessApprovalService() => instance;
   AccessApprovalService._internal();
 
-  /// Mengambil UID sesi anonim saat ini.
+  /// Mengambil UID sesi anonim saat ini yang terverifikasi aktif pada Firebase Auth.
   Future<String?> getCurrentAnonymousUid({bool forceRefresh = false}) async {
     final user = await AuthService.instance.ensureAnonymousSession(forceRefresh: forceRefresh);
-    return user?.uid ?? await AuthService.instance.getPersistentUid();
+    return user?.uid;
   }
 
   /// Memeriksa izin akses perangkat pada path: permissions/$uid/$deviceId.
@@ -114,14 +114,20 @@ class AccessApprovalService {
       );
     }
 
-    final uid = await getCurrentAnonymousUid(forceRefresh: forceRefresh);
+    final user = await AuthService.instance.ensureAnonymousSession(forceRefresh: forceRefresh);
+    final uid = user?.uid;
     if (uid == null || uid.isEmpty) {
       return AccessApprovalResult(
         status: AccessStatus.error,
         deviceId: cleanDeviceId,
-        message: 'Gagal membuat sesi anonim. Periksa koneksi internet Anda.',
+        message: 'Gagal membuat sesi anonim Firebase. Periksa koneksi internet Anda.',
       );
     }
+
+    // Pastikan token Firebase Auth valid sebelum query RTDB
+    try {
+      await user?.getIdToken(forceRefresh);
+    } catch (_) {}
 
     try {
       final dbRef = FirebaseDatabase.instance.ref('permissions/$uid/$cleanDeviceId');
@@ -181,10 +187,13 @@ class AccessApprovalService {
         debugPrint('verifyDeviceAccess: token kedaluwarsa terdeteksi, me-refresh token...');
         return verifyDeviceAccess(cleanDeviceId, forceRefresh: true);
       }
+      final isPermissionDenied = e.toString().contains('permission-denied');
       return AccessApprovalResult(
-        status: AccessStatus.error,
+        status: isPermissionDenied ? AccessStatus.notGranted : AccessStatus.error,
         deviceId: cleanDeviceId,
-        message: 'Gagal memeriksa status izin: $e',
+        message: isPermissionDenied
+            ? 'Akses belum aktif: UID ($uid) belum terdaftar atau belum disetujui oleh Owner perangkat $cleanDeviceId. Berikan UID ini ke Owner.'
+            : 'Gagal memeriksa status izin: $e',
       );
     }
   }

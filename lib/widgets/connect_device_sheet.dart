@@ -46,26 +46,24 @@ class _ConnectDeviceSheetState extends State<ConnectDeviceSheet>
     _initAnonymousSessionAndDefaultDevice();
   }
 
-  Future<void> _initAnonymousSessionAndDefaultDevice() async {
+  Future<void> _initAnonymousSessionAndDefaultDevice({bool forceRefresh = false}) async {
     final currentDevId = await DeviceService.getPairedDeviceId();
     if (mounted) {
       _deviceIdController.text = currentDevId.isNotEmpty ? currentDevId : 'SIMETRI_ESP32_001';
     }
 
     try {
-      final user = await AuthService.instance.ensureAnonymousSession();
-      final persistentUid = await AuthService.instance.getPersistentUid();
-      final displayUid = user?.uid ?? persistentUid;
-      if (mounted && displayUid != null && displayUid.isNotEmpty) {
+      final user = await AuthService.instance.ensureAnonymousSession(forceRefresh: forceRefresh);
+      if (mounted && user != null && user.uid.isNotEmpty) {
         setState(() {
-          _userAnonymousUid = displayUid;
+          _userAnonymousUid = user.uid;
         });
       }
     } catch (_) {
       final persistentUid = await AuthService.instance.getPersistentUid();
       if (mounted) {
         setState(() {
-          _userAnonymousUid = persistentUid ?? 'Sesi Lokal / Belum Login';
+          _userAnonymousUid = persistentUid ?? 'Sesi Belum Siap (Periksa Internet)';
         });
       }
     }
