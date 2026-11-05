@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import 'update_tariff_sheet.dart';
 import '../models/scheduled_tariff.dart';
@@ -82,7 +83,7 @@ class TariffCard extends StatelessWidget {
           const SizedBox(height: 5),
 
           Text(
-            'Aktif sejak $activeDate',
+            'Aktif sejak ${formatTariffActiveDate(activeDate)}',
             style: const TextStyle(color: Colors.white54, fontSize: 11),
           ),
           const SizedBox(height: 8),
@@ -298,5 +299,77 @@ class TariffCard extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// Menghitung label tanggal aktif secara dinamis relatif terhadap hari ini.
+  /// Mencegah teks lama seperti "Besok (05 November 2026)" tetap tertulis ketika hari sudah berganti.
+  static String formatTariffActiveDate(String rawDate) {
+    if (rawDate.trim().isEmpty) return 'Hari ini';
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    if (rawDate.toLowerCase() == 'hari ini') {
+      return 'Hari ini (${DateFormat('dd MMMM yyyy').format(today)})';
+    }
+
+    final regex = RegExp(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})');
+    final match = regex.firstMatch(rawDate);
+
+    if (match != null) {
+      final day = int.tryParse(match.group(1)!);
+      final monthStr = match.group(2)!.toLowerCase();
+      final year = int.tryParse(match.group(3)!);
+
+      final monthMap = {
+        'januari': 1, 'january': 1, 'jan': 1,
+        'februari': 2, 'february': 2, 'feb': 2,
+        'maret': 3, 'march': 3, 'mar': 3,
+        'april': 4, 'apr': 4,
+        'mei': 5, 'may': 5,
+        'juni': 6, 'june': 6, 'jun': 6,
+        'juli': 7, 'july': 7, 'jul': 7,
+        'agustus': 8, 'august': 8, 'agu': 8, 'aug': 8,
+        'september': 9, 'sep': 9,
+        'oktober': 10, 'october': 10, 'okt': 10, 'oct': 10,
+        'november': 11, 'nov': 11,
+        'desember': 12, 'december': 12, 'des': 12, 'dec': 12,
+      };
+
+      final month = monthMap[monthStr];
+      if (day != null && month != null && year != null) {
+        final targetDate = DateTime(year, month, day);
+        final diffDays = targetDate.difference(today).inDays;
+        final formattedDate = DateFormat('dd MMMM yyyy').format(targetDate);
+
+        if (diffDays == 0) {
+          return 'Hari ini ($formattedDate)';
+        } else if (diffDays == -1) {
+          return 'Kemarin ($formattedDate)';
+        } else if (diffDays == 1) {
+          return 'Besok ($formattedDate)';
+        } else {
+          return formattedDate;
+        }
+      }
+    }
+
+    try {
+      final parsed = DateTime.parse(rawDate);
+      final targetDate = DateTime(parsed.year, parsed.month, parsed.day);
+      final diffDays = targetDate.difference(today).inDays;
+      final formattedDate = DateFormat('dd MMMM yyyy').format(targetDate);
+      if (diffDays == 0) {
+        return 'Hari ini ($formattedDate)';
+      } else if (diffDays == -1) {
+        return 'Kemarin ($formattedDate)';
+      } else if (diffDays == 1) {
+        return 'Besok ($formattedDate)';
+      } else {
+        return formattedDate;
+      }
+    } catch (_) {}
+
+    return rawDate;
   }
 }

@@ -270,7 +270,9 @@ class _HomeScreenState extends State<HomeScreen> {
         final effectiveMonthlyEnergy = historyMonthlyEnergy > reading.monthlyEnergyKwh
             ? historyMonthlyEnergy
             : reading.monthlyEnergyKwh;
-        final effectiveMonthlyCost = (historyMonthlyCost != null && historyMonthlyCost > (monthlyCost ?? 0.0))
+        // Prioritaskan historyMonthlyCost karena diagregasikan dari biaya riil harian (daily_history)
+        // yang memperhitungkan tarif berbeda per hari secara akurat, menghindari penggelembungan biaya akibat rumus flat ESP32.
+        final effectiveMonthlyCost = (historyMonthlyCost != null && historyMonthlyCost > 0.0)
             ? historyMonthlyCost
             : monthlyCost;
 

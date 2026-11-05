@@ -127,7 +127,21 @@ class YearlyEnergyData {
           if (aggregatedEnergy[m] > monthlyEnergy[m]) {
             monthlyEnergy[m] = aggregatedEnergy[m];
           }
-          if (aggregatedCost[m] > monthlyCost[m]) {
+          // Prioritaskan akumulasi biaya harian riil (aggregatedCost[m]) karena memperhitungkan
+          // perbedaan tarif per hari secara akurat saat terjadi perubahan tarif di tengah bulan.
+          // Nilai monthlyCost bawaan RTDB/ESP32 rentan menggelembung karena mengalikan seluruh kWh
+          // bulanan dengan tarif terbaru yang sedang aktif.
+          if (aggregatedCost[m] > 0.0) {
+            final diffKwh = monthlyEnergy[m] - aggregatedEnergy[m];
+            if (diffKwh > 0.05) {
+              // Jika masih ada selisih energi berjalan yang belum masuk ke daily_history,
+              // akumulasikan selisih energi tersebut dengan tarif aktif
+              final latestTariff = (data['summary']?['active_tariff'] as num?)?.toDouble() ?? 0.0;
+              monthlyCost[m] = (aggregatedCost[m] + (diffKwh * latestTariff)).roundToDouble();
+            } else {
+              monthlyCost[m] = aggregatedCost[m];
+            }
+          } else if (aggregatedCost[m] > monthlyCost[m]) {
             monthlyCost[m] = aggregatedCost[m];
           }
         }
@@ -160,9 +174,9 @@ class YearlyEnergyData {
     final totalEnergy = totalEnergyFromSummary != null && totalEnergyFromSummary > totalEnergyFromMonths
         ? totalEnergyFromSummary
         : totalEnergyFromMonths;
-    final totalCost = totalCostFromSummary != null && totalCostFromSummary > totalCostFromMonths
-        ? totalCostFromSummary
-        : totalCostFromMonths;
+    final totalCost = (totalCostFromMonths > 0.0)
+        ? totalCostFromMonths
+        : (totalCostFromSummary ?? 0.0);
     final avgEnergy = totalEnergy / 12;
 
     // Hitung persentase perubahan jika ada data tahun sebelumnya

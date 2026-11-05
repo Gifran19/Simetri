@@ -358,7 +358,8 @@ class _UpdateTariffSheetState extends State<UpdateTariffSheet> {
                         );
                         if (!authorized) return;
 
-                        widget.onSave(value, _effectiveDate, _selectedDateLabel, _noteController.text);
+                        final cleanDateStr = DateFormat('dd MMMM yyyy').format(_effectiveDate);
+                        widget.onSave(value, _effectiveDate, cleanDateStr, _noteController.text);
                         if (!context.mounted) return;
                         Navigator.pop(context);
                       }
