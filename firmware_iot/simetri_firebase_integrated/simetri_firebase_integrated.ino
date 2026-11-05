@@ -185,6 +185,7 @@ float energyAwalHari = NAN;
 float energyAwalBulan = NAN;
 float energiHari = 0.0f;
 float energiBulan = 0.0f;
+float biayaTerkunciBulanIni = 0.0f; // Akumulasi biaya riil hari-hari sebelumnya dalam bulan berjalan (mengunci biaya tarif lama)
 
 // Antrean periode harian selesai saat offline (Kapasitas: 7 hari / 1 minggu)
 const int MAX_PENDING_DAYS = 7;
@@ -493,6 +494,11 @@ void setup() {
     Serial.printf(
         "[NVS] Restore baseline bulanan: %.4f kWh (Bln: %d, Thn: %d)\n",
         energyAwalBulan, savedMon + 1, savedYear);
+  }
+
+  biayaTerkunciBulanIni = energyPrefs.getFloat("b_lock_mon", 0.0f);
+  if (biayaTerkunciBulanIni > 0.0f) {
+    Serial.printf("[NVS] Restore akumulasi biaya terkunci bulan ini: Rp %.0f\n", biayaTerkunciBulanIni);
   }
 
   // Restore antrean pending harian (mendukung minimal 7 hari offline)
@@ -826,8 +832,9 @@ void tampilBulan() {
   lcd.print(lcdBuf);
 
   lcd.setCursor(0, 1);
-  long biaya = (long)roundf(monthKwh * tarifPerKwh);
-  snprintf(lcdBuf, sizeof(lcdBuf), "Biaya: Rp%ld       ", biaya);
+  long biayaHariIni = (long)roundf(energiHari * tarifPerKwh);
+  long biayaTotalBulan = (long)roundf(biayaTerkunciBulanIni) + biayaHariIni;
+  snprintf(lcdBuf, sizeof(lcdBuf), "Biaya: Rp%ld       ", biayaTotalBulan);
   lcd.print(lcdBuf);
 }
 
@@ -1324,7 +1331,7 @@ bool kirimTelemetriCloud() {
 
   float dailyCost = (float)roundf(energiHari * tarifPerKwh);
   float monthKwh = max(energiBulan, (kalenderBulan >= 0 && kalenderBulan < 12) ? energiBulanCached[kalenderBulan] : 0.0f);
-  float monthlyCost = (float)roundf(monthKwh * tarifPerKwh);
+  float monthlyCost = (float)roundf(biayaTerkunciBulanIni) + dailyCost;
 
   doc["energy_kwh"] = isnan(energyKwh) ? (float)0.0 : energyKwh;
   doc["daily_energy"] = energiHari;
@@ -1566,6 +1573,12 @@ bool periksaWaktuKalender() {
         char dStr[16];
         snprintf(dStr, sizeof(dStr), "%04d-%02d-%02d", savedYear, savedMon + 1, savedDay);
         antrekanHariSelesai(dStr, savedYear, lastDayKwh, lastDayCost, (timeinfo.tm_wday + 5) % 7);
+
+        // Kunci biaya hari yang selesai ke akumulator bulanan jika masih dalam bulan yang sama
+        if (savedYear == tahun && savedMon == bulan) {
+          biayaTerkunciBulanIni += lastDayCost;
+          energyPrefs.putFloat("b_lock_mon", biayaTerkunciBulanIni);
+        }
       }
 
       if (!isnan(energyKwh)) {
@@ -1577,6 +1590,8 @@ bool periksaWaktuKalender() {
         if (savedYear != tahun || savedMon != bulan) {
           energyAwalBulan = energyKwh;
           energiBulan     = 0.0f;
+          biayaTerkunciBulanIni = 0.0f;
+          energyPrefs.putFloat("b_lock_mon", 0.0f);
           energyPrefs.putFloat("e_start_mon", energyAwalBulan);
           energyPrefs.putInt("cal_mon", bulan);
           energyPrefs.putInt("cal_year", tahun);
@@ -1601,6 +1616,10 @@ bool periksaWaktuKalender() {
       float finalDayCost = (float)roundf(energiHari * tarifPerKwh);
       antrekanHariSelesai(dStr, kalenderTahun, finalDayKwh, finalDayCost, kalenderHariMinggu);
 
+      // Kunci biaya hari yang selesai ke akumulator bulanan
+      biayaTerkunciBulanIni += finalDayCost;
+      energyPrefs.putFloat("b_lock_mon", biayaTerkunciBulanIni);
+
       // Jika minggu berganti (Senin baru), tandai untuk reset grafik mingguan di RTDB
       if (hariM == 0 && kalenderHariMinggu != 0) {
         perluResetMingguan = true;
@@ -1613,7 +1632,7 @@ bool periksaWaktuKalender() {
         pendingMonthYear = kalenderTahun;
         pendingMonthIdx  = kalenderBulan;
         pendingMonthKwh  = energiBulan;
-        pendingMonthCost = (float)roundf(energiBulan * tarifPerKwh);
+        pendingMonthCost = biayaTerkunciBulanIni; // Total biaya bulanan adalah akumulasi riil harian
         hasPendingMonth  = true;
 
         energyPrefs.putInt("p_mon_year", pendingMonthYear);
@@ -1636,6 +1655,8 @@ bool periksaWaktuKalender() {
         // Reset baseline bulan baru
         energyAwalBulan = energyKwh;
         energiBulan     = 0.0f;
+        biayaTerkunciBulanIni = 0.0f;
+        energyPrefs.putFloat("b_lock_mon", 0.0f);
         energyPrefs.putFloat("e_start_mon", energyAwalBulan);
         energyPrefs.putInt("cal_mon", bulan);
         energyPrefs.putInt("cal_year", tahun);
@@ -1865,6 +1886,42 @@ bool muatRiwayatBulananDariCloud() {
       }
     }
 
+    // Restore akumulasi biaya hari-hari sebelumnya di bulan ini dari daily_history
+    if (biayaTerkunciBulanIni == 0.0f && kalenderTahun >= 2024) {
+      String urlHist = "https://" + String(FIREBASE_HOST) + "/energy_data/" + String(DEVICE_ID) + "/" + String(kalenderTahun) + "/daily_history.json?auth=" + firebaseIdToken;
+#if USE_FIREBASE_EMULATOR
+      urlHist = "http://" + String(EMULATOR_HOST) + ":" + String(EMULATOR_RTDB_PORT) + "/energy_data/" + String(DEVICE_ID) + "/" + String(kalenderTahun) + "/daily_history.json?ns=" + String(FIREBASE_RTDB_NAMESPACE) + "&auth=" + firebaseIdToken;
+      if (http.begin(plainClient, urlHist)) {
+#else
+      if (http.begin(secureClient, urlHist)) {
+#endif
+        int codeHist = http.GET();
+        if (codeHist == 200) {
+          String respHist = http.getString();
+          DynamicJsonDocument docHist(4096);
+          if (deserializeJson(docHist, respHist) == DeserializationError::Ok && docHist.is<JsonObject>()) {
+            float sumLocked = 0.0f;
+            char mPrefix[10];
+            snprintf(mPrefix, sizeof(mPrefix), "%04d-%02d", kalenderTahun, kalenderBulan + 1);
+            for (JsonPair kv : docHist.as<JsonObject>()) {
+              String dKey = kv.key().c_str();
+              if (dKey.startsWith(mPrefix) && dKey != String(kalenderTanggalStr)) {
+                if (kv.value().is<JsonObject>() && kv.value()["cost_rp"].is<float>()) {
+                  sumLocked += kv.value()["cost_rp"].as<float>();
+                }
+              }
+            }
+            if (sumLocked > 0.0f) {
+              biayaTerkunciBulanIni = sumLocked;
+              energyPrefs.putFloat("b_lock_mon", biayaTerkunciBulanIni);
+              Serial.printf("[HISTORI] Restore biaya terkunci bulan ini dari RTDB: Rp %.0f\n", biayaTerkunciBulanIni);
+            }
+          }
+        }
+        http.end();
+      }
+    }
+
     return true;
   }
   http.end();
@@ -1909,7 +1966,7 @@ bool kirimHistoriCloud() {
 
   float dailyCost   = (float)roundf(energiHari * tarifPerKwh);
   float monthKwh    = max(energiBulan, (kalenderBulan >= 0 && kalenderBulan < 12) ? energiBulanCached[kalenderBulan] : 0.0f);
-  float monthlyCost = (float)roundf(monthKwh * tarifPerKwh);
+  float monthlyCost = (float)roundf(biayaTerkunciBulanIni) + dailyCost;
 
   if (kalenderBulan >= 0 && kalenderBulan < 12) {
     energiBulanCached[kalenderBulan] = monthKwh;
